@@ -37,6 +37,12 @@ func sysRead(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> In
     read(fd, buffer, count)
 }
 
+/// Plain `write(2)`, for regular files and pipes.
+func sysWriteFile(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int {
+    write(fd, buffer, count)
+}
+
+/// `write(2)` for sockets, with SIGPIPE suppressed.
 func sysWrite(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int {
     #if canImport(Darwin)
     // SIGPIPE is disabled per-socket with SO_NOSIGPIPE; see PosixSocket.

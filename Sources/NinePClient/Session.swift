@@ -51,6 +51,9 @@ public struct NinePSessionOptions: Sendable {
     public var versions: [NinePVersion]
     /// How long to wait for the TCP connection.
     public var connectTimeout: TimeInterval
+    /// How long to wait for each Rversion. Some servers answer an offer they
+    /// do not understand with silence rather than "unknown".
+    public var handshakeTimeout: TimeInterval
     /// Client identifier reported in Tlock/Tgetlock.
     public var clientID: String
 
@@ -58,11 +61,13 @@ public struct NinePSessionOptions: Sendable {
         msize: UInt32 = NineP.defaultMsize,
         versions: [NinePVersion] = [.v9P2000L, .v9P2000u, .v9P2000],
         connectTimeout: TimeInterval = 30,
+        handshakeTimeout: TimeInterval = 15,
         clientID: String = "fs9kit"
     ) {
         self.msize = msize
         self.versions = versions
         self.connectTimeout = connectTimeout
+        self.handshakeTimeout = handshakeTimeout
         self.clientID = clientID
     }
 }
@@ -144,6 +149,9 @@ public final class NinePSession: @unchecked Sendable {
         let codec = MessageCodec(version: .v9P2000)
         var msize = options.msize
         var lastReply = ""
+        socket.setReadTimeout(options.handshakeTimeout)
+        // Restore blocking reads: the reader thread must wait indefinitely.
+        defer { socket.setReadTimeout(0) }
         for candidate in options.versions {
             let frame = Frame(tag: NineP.notag,
                               message: .tversion(msize: msize, version: candidate.rawValue))
@@ -313,12 +321,15 @@ public final class NinePSession: @unchecked Sendable {
         }
         switch reply {
         case let .rerror(message, errno):
+            // 9P2000.u numbers come from a Linux-shaped server in practice, so
+            // they go through the same translation as Rlerror.
             if let errno {
-                throw NinePServerError(errno: Int32(bitPattern: errno), message: message)
+                throw NinePServerError(
+                    errno: LinuxErrno.toHost(Int32(bitPattern: errno)), message: message)
             }
             throw NinePServerError.fromLegacy(message)
         case let .rlerror(errno):
-            let code = Int32(bitPattern: errno)
+            let code = LinuxErrno.toHost(Int32(bitPattern: errno))
             throw NinePServerError(errno: code, message: String(cString: strerror(code)))
         default:
             return reply

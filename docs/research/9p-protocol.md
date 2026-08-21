@@ -240,10 +240,17 @@ string `"wwdQdddqssss?sugu"`, which expands to:
 | `n_gid`  | 4 | numeric gid hint |
 | `n_muid` | 4 | numeric uid of last modifier |
 
-So a base-9P2000 stat entry occupies `2 + size` bytes total, and
-`size == 47 + len(name) + len(uid) + len(gid) + len(muid)` (where each `len`
-already includes the 2-byte string prefix... concretely:
-`size = 2+4+13+4+4+8 = 35` fixed bytes plus the four length-prefixed strings).
+A base-9P2000 stat entry occupies `2 + size` bytes on the wire. The fixed part
+after the `size` field is `2 + 4 + 13 + 4 + 4 + 4 + 8 = 39` bytes, and each of
+the four strings adds `2 + byteCount`, so:
+
+```
+size = 39 + 8 + |name| + |uid| + |gid| + |muid|
+     = 47 + |name| + |uid| + |gid| + |muid|          (byte counts, not runes)
+```
+
+[verified] `name="hello.txt"(9) uid="root"(4) gid="root"(4) muid=""(0)`
+gives `size = 47+9+4+4+0 = 64`, matching the wire exactly.
 
 **The `Rstat` / `Twstat` double-size quirk** [verified]:
 
@@ -692,7 +699,7 @@ Tstatfs      tag[2] fid[4]
 Rstatfs      tag[2] type[4] bsize[4] blocks[8] bfree[8] bavail[8]
                     files[8] ffree[8] fsid[8] namelen[4]
              -- kernel reads "ddqqqqqqd". type is the f_type magic
-                (e.g. 0x01021997 V9FS_MAGIC, 0xEF53 EXT4). 52 bytes of body
+                (e.g. 0x01021997 V9FS_MAGIC, 0xEF53 EXT4). 60 bytes of body
                 after the tag.
 
 Tlopen       tag[2] fid[4] flags[4]
@@ -987,3 +994,475 @@ means "no conflicting lock".
 `Txattrcreate flags[4]`: `0` = replace-or-create, `1` = `XATTR_CREATE`,
 `2` = `XATTR_REPLACE`.
 
+---
+
+## 4. Transports
+
+**There are no framing differences between transports.** Every transport carries
+the identical `size[4] type[1] tag[2] body…` byte stream. The transport only
+decides how bytes move.
+
+### 4.1 TCP — the one that matters for a macOS client
+
+* IANA/`/etc/services` registers **564/tcp** as `9pfs` (also seen as `p9fs`).
+  Plan 9's `srv`, `u9fs` under inetd, and `diod` all default to 564.
+* Stream-oriented, no message boundaries from the transport. Read 4 bytes, then
+  `size-4` more. **Never assume one `recv` = one message**; on loopback with
+  pipelined requests you will regularly get several messages in a single read.
+* Set `TCP_NODELAY`. 9P is request/response with small headers; Nagle adds
+  40 ms stalls on every round trip.
+* No TLS in the protocol. Plan 9 wraps it externally (`tlssrv`); `lionkov/go9p`
+  has a TLS example. For CI over loopback, plaintext is fine.
+* Linux mounts it with `mount -t 9p -o trans=tcp,port=5640,version=9p2000.L 127.0.0.1 /mnt`.
+
+### 4.2 Unix domain sockets
+
+* Same byte stream over `AF_UNIX`/`SOCK_STREAM`. Linux: `-o trans=unix`.
+* This is the plan9port convention: `9pserve` posts a service socket under
+  `$NAMESPACE` (default `/tmp/ns.$USER.$DISPLAY/`), and clients like `9p(1)`
+  connect to `unix!/tmp/ns.$USER.:0/acme`.
+* `hugelgupf/p9`'s `p9ufs -unix /path/to/sock` and `knusbaum/go9p`'s
+  `export9p -srv name` both do this.
+* Worth supporting in a Swift client: it is the cheapest local-IPC option on
+  macOS and needs no port allocation in CI.
+
+### 4.3 File descriptors / stdio
+
+* Linux: `-o trans=fd,rfdno=N,wfdno=M`.
+* This is how `u9fs` and plan9port's `exportfs` are designed to run: the process
+  speaks 9P on fd 0 / fd 1 and something else (inetd, ssh, `socat`) provides the
+  socket. A client library should be able to run over any pair of
+  `FileHandle`s / a `DispatchIO` channel, not just a socket.
+
+### 4.4 virtio (QEMU / KVM VirtFS)
+
+* Guest side: `mount -t 9p -o trans=virtio,version=9p2000.L,msize=512000 <mount_tag> /mnt`.
+* Host side: `-virtfs local,path=/host/dir,mount_tag=hostshare,security_model=mapped-xattr`
+  or the split `-fsdev local,... -device virtio-9p-pci,fsdev=...,mount_tag=...`.
+* The `mount_tag` is what the guest passes as **`aname`**.
+* Messages are placed whole into a virtqueue descriptor chain — still
+  `size[4]`-prefixed, still identical bytes. `msize` is bounded by the queue
+  layout (Linux caps virtio at ~512 KiB by default).
+* QEMU's `proto_version` supports **`9P2000.u` and `9P2000.L` only** — it does
+  *not* accept plain `9P2000`. (This is the well-known reason Harvey/Plan 9
+  guests cannot use QEMU virtfs directly.)
+* Not directly reachable from a macOS host process, but relevant because it is
+  the single biggest deployment of 9P and it dictates `.L`.
+
+### 4.5 Others
+
+* **RDMA** (`trans=rdma`), **Xen** (`trans=xen`), **USB gadget** (`trans=usbg`)
+  exist in the Linux client. Irrelevant here.
+* **hvsocket** — WSL2's Plan9 server is reached over an HV socket from Windows
+  (`p9rdr.sys` → `wslservice.exe`); WSL1 used a plain Unix socket. Protocol is
+  `9P2000.L`.
+
+### 4.6 Linux mount options worth knowing (they define server expectations)
+
+| Option | Meaning |
+|---|---|
+| `trans=` | `tcp` \| `unix` \| `fd` \| `virtio` \| `rdma` \| `xen` \| `usbg` |
+| `version=` | `9p2000` \| `9p2000.u` \| `9p2000.L` (note the capital L) |
+| `port=` | TCP port, default 564 |
+| `msize=` | payload size; default 8 KiB, virtio commonly 512 KiB |
+| `uname=` | user name sent in `Tattach.uname` |
+| `aname=` | tree/export selector sent in `Tattach.aname` |
+| `access=` | `user` (default: one attach per uid) \| `<uid>` \| `any` \| `client` |
+| `dfltuid=` / `dfltgid=` | uid/gid used when the server sends none |
+| `cache=` | `none` \| `readahead` \| `mmap` \| `loose` \| `fscache` |
+| `debug=` | bitmask; `0x08` traces 9P messages — invaluable when debugging a client |
+
+The `access=user` default is why a server sees **one `Tattach` per user**, and
+why a client that multiplexes users must issue multiple attaches on the same
+connection (each with its own root fid). A single-user macOS client can attach
+exactly once.
+
+---
+
+## 5. Which version should a macOS client speak?
+
+### 5.1 Ecosystem matrix
+
+| Peer | Speaks | Notes |
+|---|---|---|
+| **QEMU virtfs / virtio-9p** | `.u`, `.L` | **Refuses plain `9P2000`.** `.L` is what all modern Linux guests mount. |
+| **Linux kernel `v9fs` (as a server's peer)** | base, `.u`, `.L` | client only, but defines the dialect |
+| **WSL2 / WSL1 Plan9 server** | `.L` only | `\\wsl$`, `p9rdr.sys` |
+| **gVisor** | `.L` (via `hugelgupf/p9`'s ancestor; now migrating to LISAFS) | `.L` |
+| **`diod`** | `.L` only | Linux-only build |
+| **`nfs-ganesha`** | `.L` (`9p.2000L` since Ganesha 2.0) | Linux-only, optional build |
+| **`u9fs`** (9fans) | 9P1 + base `9P2000` | *no* `.u`, *no* `.L` [verified: downgrades a `9P2000.u` request to `9P2000`] |
+| **plan9port** (`exportfs`, `9pserve`, `ramfs`, `9pfuse`) | base `9P2000` | the Plan 9 world |
+| **9front / Plan 9** | base `9P2000` (+ `9P2000.u` in some ports) | |
+| **`hugelgupf/p9`** (Go) | `.L` only | [verified: rejects `9P2000` and `9P2000.u` with `"unknown"`] |
+| **`knusbaum/go9p`** (Go) | base `9P2000` | [verified; **hangs** on a `9P2000.u` request] |
+| **`docker/go-p9p`** (Go) | base `9P2000` | library + `9pr` client REPL; no server binary |
+| **`droyo/styx`** (Go) | base `9P2000` | library only, no `main` package |
+| **`Harvey-OS/ninep`** (Go) | base `9P2000` | `cmd/ufs` exports `/` only, no root flag |
+| **`lionkov/go9p`** (Go) | base + `.u` (`Dotu` flag) | `ufs` example sets `Dotu = true`; uses `aname` as the root path |
+| **`lionkov/ninep`** (Go) | base | successor to go9p |
+| **`rs9p` / `rust-9p`** (Rust) | `.L` only | |
+| **`p9` crate / crosvm `p9`** (Rust) | `.L` | used by crosvm/ChromeOS |
+| **`py9p`** (Python) | base + `.u` | unmaintained |
+| **`space9`** (Python) | base | |
+| **`Sharp9P`** (C#) | base | |
+| **`c9`, `libixp`, `lib9p`** (C) | base | |
+
+### 5.2 Recommendation
+
+**Implement `9P2000.L` first.** Rationale:
+
+1. It is the only dialect that reaches QEMU, WSL2, gVisor, diod and every
+   modern Go/Rust server. Base 9P2000 reaches *none* of those.
+2. Its message set is a near-mechanical mapping onto POSIX, which is what a
+   macOS client will expose (`FileManager`, `FSKit`, `NSFileProviderReplicatedExtension`,
+   or a plain `FileHandle`-ish API). No stat-string marshalling, no
+   `DM*`↔`S_IF*` translation, real `nlink`/`blocks`/`nsec` timestamps,
+   real `symlink`/`readlink`/`link`/`mkdir`/`rename`/`unlinkat`, `fsync`, `statfs`,
+   POSIX record locks, and xattrs.
+3. Numeric errnos are far easier to surface as Swift `Errno`/`POSIXError` than
+   free-form Plan 9 error strings.
+
+**Then add base `9P2000`**, because it is the entire Plan 9 / plan9port /
+`u9fs` / most-Go-libraries world, and because it is small: 6 extra messages
+(`Topen`, `Tcreate`, `Tstat`, `Twstat`, `Rerror`) plus the `stat` codec.
+
+**Then `.u` opportunistically** — once base exists it is a handful of
+conditional fields. Its unique reach is narrow (QEMU with `version=9p2000.u`,
+`lionkov/go9p`, `py9p`).
+
+**Design the codec for all three from day one.** Concretely:
+
+```swift
+enum Dialect: String { case base = "9P2000", dotU = "9P2000.u", dotL = "9P2000.L" }
+```
+
+and thread it through encode/decode, exactly as the Linux kernel threads
+`proto_version` and marks conditional fields with `?`. Retrofitting a dialect
+parameter later means touching every message.
+
+Negotiation strategy for a client that wants maximum reach:
+
+```
+try Tversion("9P2000.L")
+  → "9P2000.L"  : use .L
+  → "9P2000.u"  : use .u        (spec-compliant downgrade)
+  → "9P2000"    : use base
+  → "unknown"   : reconnect, try Tversion("9P2000.u"), then "9P2000"
+  → no reply within N seconds : reconnect and try "9P2000"
+```
+
+The reconnect is necessary because some servers close or wedge the connection
+after a failed negotiation, and because `Tversion` resets state anyway.
+
+---
+
+## 6. Test servers runnable on a macOS GitHub Actions runner
+
+Target: `macos-latest` (macOS 26 "Tahoe", arm64). Preinstalled: Go, Rust,
+Python 3, Xcode CLT, Homebrew.
+
+Evidence basis: each Go candidate below was **actually cross-compiled for
+`darwin/arm64`** with `GOOS=darwin GOARCH=arm64 go install …@latest` using
+Go 1.24.7 during this research; the Rust candidates were checked with
+`cargo check --target aarch64-apple-darwin`; `u9fs` was compiled and run and
+probed with a hand-written 9P client.
+
+### 6.1 Ranked recommendation
+
+#### 🥇 1. `hugelgupf/p9` → `p9ufs` (Go, 9P2000.L) — **primary fixture**
+
+```yaml
+- uses: actions/setup-go@v5
+  with: { go-version: 'stable' }
+- name: Install p9ufs
+  run: go install github.com/hugelgupf/p9/cmd/p9ufs@latest
+- name: Start 9P2000.L server
+  run: |
+    mkdir -p "$RUNNER_TEMP/export"
+    "$(go env GOPATH)/bin/p9ufs" -root "$RUNNER_TEMP/export" 127.0.0.1:5640 &
+    for i in $(seq 1 50); do nc -z 127.0.0.1 5640 && break; sleep 0.1; done
+```
+
+* **Builds for darwin/arm64: yes, verified** (module `github.com/hugelgupf/p9`
+  v0.4.1, pure Go, no cgo, deps `u-root/uio` + `golang.org/x/sys` only).
+* Flags: `-root <dir>` (default `/`), `-unix` (listen on a Unix socket instead
+  of TCP), `-v` (log every message — very useful for CI failure diagnosis).
+  Positional arg is the bind address.
+* Versions: **`9P2000.L` only**. Verified: replies `unknown` to `9P2000`,
+  `9P2000.u` and `9P2000.L1`.
+* Coverage verified live: `Tversion`, `Tattach` (with `n_uname`), `Twalk`
+  (clone + named), `Tlopen`, `Tread`, `Treaddir`, `Tgetattr` (`valid=0x3fff`),
+  `Tsetattr`, `Txattrwalk`, `Tlock`. `Tstatfs` → `ENOSYS(38)`.
+* Caveats: `aname` is ignored (root is the flag); no auth; dirent `type` byte
+  carries the qid type rather than `DT_*`; msize is not clamped.
+
+#### 🥈 2. `knusbaum/go9p` → `export9p` (Go, base 9P2000) — **secondary fixture**
+
+```yaml
+- run: go install github.com/knusbaum/go9p/cmd/export9p@latest
+- run: |
+    "$(go env GOPATH)/bin/export9p" -dir "$RUNNER_TEMP/export" -address 127.0.0.1:5641 &
+```
+
+* **Builds for darwin/arm64: yes, verified** (v1.18.0). Also produces
+  `ramfs`, `import9p`, `mount9p`, `simple`, `utilfs`, `savedstream`, `extended`.
+* Flags: `-dir`, `-address`, `-srv <name>` (Unix socket in the p9p namespace),
+  `-s` (serve on stdin/stdout), `-noperm` (skip permission enforcement — use
+  this in CI so tests don't depend on the runner's uid), `-v` (message trace).
+* Versions: base `9P2000` only. msize clamped to 65535.
+* Coverage verified live: `Tversion`, `Tattach`, `Twalk`, `Topen`, `Tread` on a
+  directory returning well-formed concatenated `stat` entries, `Tstat` with the
+  correct `n == size + 2` double-size framing.
+* **Caveat: it hangs (no reply, connection left open) if you send
+  `Tversion "9P2000.u"`.** Your negotiation code needs a timeout; this fixture
+  is actually a useful regression test for that.
+
+#### 🥉 3. `u9fs` (C, base 9P2000) — optional "canonical Plan 9" fixture
+
+```yaml
+- run: brew install socat
+- run: |
+    git clone --depth 1 https://github.com/Plan9-Archive/u9fs "$RUNNER_TEMP/u9fs"
+    make -C "$RUNNER_TEMP/u9fs"
+- run: |
+    socat TCP-LISTEN:5642,bind=127.0.0.1,reuseaddr,fork \
+      EXEC:"$RUNNER_TEMP/u9fs/u9fs -n -a none -u $USER -l $RUNNER_TEMP/u9fs.log $RUNNER_TEMP/export" &
+```
+
+* **Builds on macOS: yes.** `plan9.h` starts with `#ifdef __APPLE__ /
+  #define _DARWIN_C_SOURCE`; the README states it "runs on many
+  POSIX-compatible systems, including Linux and MacOS X". Plain `make`, no
+  configure, no dependencies. (Verified building cleanly with `cc` here; the
+  Darwin path is explicitly supported upstream.)
+* **Serves on stdin/stdout only** — it is an inetd program. Hence `socat`
+  (available from homebrew-core with an `arm64_tahoe` bottle) or a 5-line
+  Python accept-and-fork shim.
+* Options: `-a none` (no auth — essential for CI), `-n` (not launched from
+  inetd; skip peer-address lookup), `-u <user>` (serve everything as this Unix
+  user), `-m <msize>`, `-l <logfile>`, `-D` (chatty debug), `-z` (truncate log).
+  Final positional arg is the exported root.
+* Versions: 9P1 and base `9P2000`. Verified: downgrades a `9P2000.u` request to
+  `9P2000` (the spec-correct behaviour, and a good negotiation test).
+  Default msize 8216.
+* Mirrors: `github.com/Plan9-Archive/u9fs`, `github.com/unofficial-mirror/u9fs`,
+  upstream `bitbucket.org/plan9-from-bell-labs/u9fs`.
+
+### 6.2 Everything else, and why it is not the fixture
+
+| Candidate | darwin/arm64 | Verdict |
+|---|---|---|
+| `github.com/lionkov/go9p` (`ufs`) | **builds** (verified) | Serves 9P2000**.u** (`Dotu = true`), flags `-addr`, `-user`, `-d`. Root comes from `Tattach.aname`, not a flag — awkward but usable, and it is the *only* easily-runnable `.u` server. Unmaintained since 2019. Good third fixture if you implement `.u`. |
+| `github.com/Harvey-OS/ninep` (`cmd/ufs`) | **builds** (verified) | Exports `/` with no way to scope it (`-ntype`, `-addr` only). Unsafe/unhelpful for CI. |
+| `github.com/docker/go-p9p` | fails `@latest` | Only `cmd/9pr`, an interactive **client**. No server binary. `go install …@latest` currently fails because `golang.org/x/net@v0.58.0` needs Go ≥ 1.25. Excellent code to *read*. |
+| `aqwari.net/net/styx` (droyo) | builds | Library only — `go install ./...` reports "matched only non-main packages". Would need you to write a `main`. Its author's ["Writing a 9p server from scratch"](https://blog.aqwari.net/9p/) series is the best prose introduction to 9P2000. |
+| `github.com/u-root/u-root` ninep | — | Now vendored as `hugelgupf/p9`; use that. |
+| `chaos/diod` | **no** | `configure.ac` defines `_GNU_SOURCE`, probes `sys/prctl.h`, uses `sys/fsuid.h`, munge auth, Linux capabilities. Linux-only. Its `protocol.md` is nevertheless *the* `.L` reference. |
+| `rs9p/rs9p` and `pfpacket/rust-9p` (`unpfs`) | **no (verified)** | `cargo check --target aarch64-apple-darwin` fails with 5 × `E0308`: `nix::sys::statfs::Statfs::blocks()/blocks_free()/blocks_available()/files()/files_free()` return `u32` on Darwin but the code expects `u64`. Both the original and the maintained `rs9p/rs9p` fork (v0.13.0) fail identically. Fixable with `as u64` casts + a fork, but not "install and run". |
+| `p9` crate (crosvm) | no | Linux-specific (`openat`, `unlinkat`, Linux `statfs`). |
+| `npfs` (C) | no | Predecessor of diod; Linux-only. |
+| `py9p` / `space9` (Python) | maybe | `py9p` is unmaintained (superseded by `pyroute2`); base + `.u`. Would work as a pure-Python fixture but is far less trustworthy as a conformance oracle than `u9fs`. |
+| **plan9port** (`exportfs`, `9pserve`, `ramfs`, `9pfuse`, `9p(1)`) | source build only | **Not in homebrew-core and not a cask** (removed years ago — see Homebrew/brew#6478). Requires cloning `9fans/plan9port` and running `./INSTALL`, which is slow (~minutes), has had recurring Apple-silicon/Xcode breakages, and pulls in an X11-less build path. It does **not** ship `u9fs`. Great for local exploration (`9p ls`, `9p read` are handy manual test tools), poor CI dependency. |
+| macOS native 9P | n/a | `benavento/mac9p` is an abandoned kext. There is no OS-level 9P on macOS — which is precisely why this library exists. |
+
+### 6.3 Suggested CI shape
+
+Run **both** Go fixtures in the same job on different ports, and drive the
+Swift test suite against each with the appropriate dialect:
+
+```yaml
+jobs:
+  interop:
+    runs-on: macos-latest       # arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: 'stable' }
+      - name: Install 9P fixtures
+        run: |
+          go install github.com/hugelgupf/p9/cmd/p9ufs@latest
+          go install github.com/knusbaum/go9p/cmd/export9p@latest
+      - name: Start servers
+        run: |
+          export FIX="$RUNNER_TEMP/export"
+          mkdir -p "$FIX/sub" && echo "hello 9p" > "$FIX/hello.txt"
+          BIN="$(go env GOPATH)/bin"
+          "$BIN/p9ufs"   -root "$FIX" 127.0.0.1:5640 &  echo "P9L_PID=$!"  >> "$GITHUB_ENV"
+          "$BIN/export9p" -noperm -dir "$FIX" -address 127.0.0.1:5641 & echo "P9_PID=$!" >> "$GITHUB_ENV"
+          for p in 5640 5641; do
+            for i in $(seq 1 100); do nc -z 127.0.0.1 $p && break; sleep 0.1; done
+          done
+      - run: swift test
+        env:
+          FS9KIT_DOTL_ADDR: 127.0.0.1:5640
+          FS9KIT_BASE_ADDR: 127.0.0.1:5641
+          FS9KIT_FIXTURE_DIR: ${{ runner.temp }}/export
+```
+
+Pin the fixture versions (`@v0.4.1`, `@v1.18.0`) rather than `@latest` once the
+suite is green, so a fixture release cannot break your CI.
+
+Because the fixture root is a real directory on the runner, tests can assert
+both directions: mutate through 9P and verify with `FileManager`, and vice
+versa. Add `-v` to either server when a test fails to get a full message trace
+in the job log.
+
+---
+
+## 7. Existing implementations worth reading
+
+### Swift
+
+**There is no 9P implementation in Swift**, client or server, as of this
+research (checked the `awesome-9p` index, GitHub search, and Swift Package
+Index). `fs9kit` would be the first. The nearest relatives on Apple platforms
+are `benavento/mac9p` (an abandoned macOS kernel extension) and general-purpose
+NIO-based protocol libraries you can crib structure from
+(`swift-nio`'s `ByteToMessageDecoder` is a natural fit for the `size[4]` framing).
+
+### Clients worth reading, by usefulness to this project
+
+1. **Linux `net/9p/`** (`client.c`, `protocol.c`, `trans_fd.c`) — the reference
+   client. `protocol.c`'s format-string codec (`p9pdu_readf`/`p9pdu_writef`) is
+   the most compact complete statement of every wire layout in all three
+   dialects, and the `?` conditional marker is exactly the dialect-switching
+   trick to copy.
+2. **`hugelgupf/p9`** (Go) — cleanest modern `.L` implementation, client *and*
+   server, and it is your CI fixture, so reading it tells you what your tests
+   are actually talking to. Look at `p9/messages.go` and `p9/transport.go`.
+3. **`docker/go-p9p`** (Go) — the best-structured base-9P2000 client: explicit
+   `Session` interface, proper tag multiplexing, context/cancellation wired to
+   `Tflush`. Directly relevant to designing a Swift-concurrency client.
+4. **plan9port `lib9pclient` / `src/cmd/9p.c`** (C) — the canonical minimal
+   client; `9p ls`, `9p read`, `9p write` are also useful hand-testing tools.
+5. **`aqwari.net/net/styx`** + [blog.aqwari.net/9p](https://blog.aqwari.net/9p/)
+   — three-part narrative on implementing 9P; the best explanation of fid and
+   walk semantics in prose.
+6. **`chaos/diod`** — `protocol.md` is the `.L` spec; `libnpclient/` is a
+   complete C `.L` client.
+7. **`rs9p`** (Rust) — `src/fcall.rs` + `src/serialize.rs` are a tidy typed
+   model of the `.L` message set; useful as a shape reference for a Swift
+   `enum Message` with associated values.
+8. **`knusbaum/go9p`** — small enough to read end-to-end in an afternoon,
+   base dialect, and it is your second fixture.
+9. **`pbchekin/p9fs-py`** (Python, fsspec) — shows how to project 9P onto a
+   high-level filesystem abstraction, which is the same problem as mapping onto
+   `FSKit`/`NSFileProvider`.
+
+### Indexes
+
+* [`henesy/awesome-9p`](https://github.com/henesy/awesome-9p) — curated list of
+  9P libraries, servers and clients across languages.
+
+---
+
+## Appendix A: constants quick-sheet
+
+```swift
+let NOTAG:  UInt16 = 0xFFFF
+let NOFID:  UInt32 = 0xFFFF_FFFF
+let MAXWELEM        = 16        // max name elements per Twalk
+let HDRSZ           = 7         // size[4] type[1] tag[2]
+let IOHDRSZ         = 24        // subtract from msize for Tread/Twrite payload
+let READDIRHDRSZ    = 24        // subtract from msize for Treaddir count
+let ERRMAX          = 128       // Plan 9 max error string length
+let QID_SIZE        = 13
+let DEFAULT_PORT    = 564
+```
+
+Fixed-size body lengths (excluding `size[4] type[1] tag[2]`):
+
+| Message | Body bytes after tag |
+|---|---:|
+| `Rlerror` | 4 |
+| `Rstatfs` | 60 |
+| `Rlopen` / `Rlcreate` / `Ropen` / `Rcreate` | 17 |
+| `Rattach` / `Rsymlink` / `Rmknod` / `Rmkdir` | 13 |
+| `Rgetattr` | 153 |
+| `Tgetattr` | 12 |
+| `Tsetattr` | 60 |
+| `Tread` / `Treaddir` | 16 |
+| `Rwrite` | 4 |
+| `Tclunk` / `Tremove` / `Tstatfs` / `Treadlink` / `Tstat` | 4 |
+| `Tfsync` / `Tlopen` | 8 |
+| `Rlock` | 1 |
+| `Rxattrwalk` | 8 |
+| `Rclunk` / `Rremove` / `Rflush` / `Rwstat` / `Rsetattr` / `Rfsync` / `Rrename` / `Rrenameat` / `Runlinkat` / `Rlink` / `Rxattrcreate` | 0 |
+
+## Appendix B: a minimal `.L` session, byte for byte
+
+Verified traffic against `p9ufs` (`-root` containing `hello.txt` and `sub/`):
+
+```
+→ Tversion  size=00000015 type=64 tag=ffff  msize=00010000 version=(8)"9P2000.L"
+← Rversion  size=00000015 type=65 tag=ffff  msize=00010000 version=(8)"9P2000.L"
+
+→ Tattach   fid=00000000 afid=ffffffff uname=(6)"nobody" aname=(0)"" n_uname=000003e8
+← Rattach   qid=80 00000000 1d200200f0000000        (QTDIR)
+
+→ Twalk     fid=00000000 newfid=00000005 nwname=0000          (clone)
+← Rwalk     nwqid=0000
+
+→ Tlopen    fid=00000005 flags=00000000                        (O_RDONLY)
+← Rlopen    qid=…  iounit=00000000
+
+→ Treaddir  fid=00000005 offset=0000000000000000 count=00001000
+← Rreaddir  count=00000016
+            qid=00…  offset=0000000000000001 type=00  name=(9)"hello.txt"
+            qid=80…  offset=0000000000000002 type=80  name=(3)"sub"
+                                                  ^^ NB: qid-type, not DT_DIR(4)
+
+→ Tgetattr  fid=00000000 request_mask=0000000000003fff
+← Rgetattr  valid=0000000000003fff qid=80… mode=000041ed(0o40755) uid=0 gid=0 …
+
+→ Tstatfs   fid=00000000
+← Rlerror   ecode=00000026                                     (38 = Linux ENOSYS)
+```
+
+And against `export9p` (base 9P2000):
+
+```
+→ Tversion  msize=00010000 version=(6)"9P2000"
+← Rversion  msize=0000ffff version=(6)"9P2000"          (clamped)
+
+→ Tread     fid=00000005 offset=0 count=8192            (fid is an open dir)
+← Rread     count=0000007e
+            [stat] size=0040 type=0000 dev=00000000 qid=00… mode=0o644
+                   atime mtime length=0000000000000009
+                   name=(9)"hello.txt" uid=(4)"root" gid=(4)"root" muid=(0)""
+            [stat] size=003a … name=(3)"sub" mode=0o20000000755 (DMDIR|0755)
+
+→ Tstat     fid=00000000
+← Rstat     n=003f  [stat] size=003d …                  (n == size + 2)  ✅
+```
+
+## Appendix C: verification log
+
+Everything marked **[verified]** in this document was established by running the
+servers and speaking 9P to them with a hand-written byte-level client during
+this research (Linux host, but the wire behaviour is host-independent; the
+darwin/arm64 claims are separately established by cross-compilation).
+
+| Claim | How verified |
+|---|---|
+| `p9ufs` builds for darwin/arm64 | `GOOS=darwin GOARCH=arm64 go install github.com/hugelgupf/p9/cmd/p9ufs@latest` → exit 0, Mach-O binary produced (v0.4.1) |
+| `export9p` builds for darwin/arm64 | same, `github.com/knusbaum/go9p/...@latest` → 8 binaries incl. `export9p` (v1.18.0) |
+| `lionkov/go9p`, `Harvey-OS/ninep` build for darwin/arm64 | same; produced `ufs` (and `ramfs`, `cl`, `tls`, …) |
+| `docker/go-p9p` `@latest` fails | `golang.org/x/net@v0.58.0 requires go >= 1.25.0` |
+| `styx` has no server binary | `go install aqwari.net/net/styx/...@latest` → "matched only non-main packages" |
+| `rust-9p`/`rs9p` do not build for darwin | `cargo check --target aarch64-apple-darwin` → 5 × `E0308` in `fcall.rs` (statfs `u32` vs `u64`), both repos |
+| `u9fs` compiles cleanly, `__APPLE__`-aware | `make` → `u9fs` binary; `plan9.h:1: #ifdef __APPLE__` |
+| `u9fs` serves 9P2000 over TCP behind an inetd shim | ran it under a Python accept/fork shim, completed `Tversion`→`Tattach`→`Twalk`→`Topen`→`Tread(dir)` |
+| `u9fs` downgrades `9P2000.u` → `9P2000` | `Rversion.version == "9P2000"`, msize 8216 |
+| `p9ufs` rejects non-`.L` versions | `Rversion.version == "unknown"`, msize 0, for `9P2000`, `9P2000.u`, `9P2000.L1`, `bogus` |
+| `export9p` hangs on `9P2000.u` | no reply within 2 min |
+| `Rstat` double size (`n == size + 2`) | `export9p`: outer `n=63`, inner `size=61` |
+| Directory `Tread` returns bare concatenated stats | parsed 2 entries, each `2 + size` bytes, ending exactly on `count` |
+| `Rgetattr` body is 153 bytes, layout as documented | `p9ufs` reply length 153, `valid=0x3fff`, `mode=0o40755` decoded at the documented offset |
+| `Rreaddir` dirent = `qid[13] offset[8] type[1] name[s]` | parsed 2 entries exactly |
+| `p9ufs` puts qid-type in the dirent `type` byte | `type=128` for a directory (`DT_DIR` would be 4) |
+| `Tstatfs` may be unimplemented | `p9ufs` → `Rlerror ecode=38` |
+| `Treaddir` requires an opened fid | `Rlerror` on an unopened directory fid |
+| `Twalk` on a missing first element yields `Rerror` | `u9fs` → `Rerror "No such file or directory"` |
+| `Tattach` `.L` includes `n_uname[4]` | accepted by `p9ufs`; kernel format `"ddss?u"` |
+| msize clamping differs per server | `p9ufs` 1 MiB→1 MiB, `export9p` 64 KiB→65535, `u9fs` →8216 |

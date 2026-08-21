@@ -226,6 +226,18 @@ public final class StreamSocket: @unchecked Sendable {
         return true
     }
 
+    /// Bounds how long a single `read` will block. Zero removes the bound.
+    ///
+    /// Used during the handshake: some servers answer an unsupported Tversion
+    /// by saying nothing at all, and a client that blocks forever on that is
+    /// indistinguishable from a hang.
+    public func setReadTimeout(_ seconds: TimeInterval) {
+        let whole = Int(seconds)
+        let micros = Int((seconds - Double(whole)) * 1e6)
+        var tv = timeval(tv_sec: whole, tv_usec: .init(micros))
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     private func setNoDelay() {
         // 9P is a request/response protocol with small headers; Nagle would add
         // a round trip of latency to every operation.
