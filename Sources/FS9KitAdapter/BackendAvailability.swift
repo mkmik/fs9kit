@@ -6,7 +6,8 @@ import Foundation
 /// older macOS it is compiled out and the module contains only the translation
 /// logic. That is intentional, but it is also invisible — a build with no FSKit
 /// backend in it looks exactly like one that has it — so the fact is recorded
-/// here, asserted by the tests, and printed by `fs9p doctor`.
+/// here and reported by the tests, so a build that quietly lost the backend is
+/// visible in a CI log rather than at the moment a mount fails.
 public enum FSKitBackend {
     #if canImport(FSKit) && compiler(>=6.2)
     public static let isCompiledIn = true

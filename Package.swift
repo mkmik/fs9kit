@@ -16,7 +16,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "fs9p",
-            dependencies: ["NineP", "NinePClient", "FS9Core", "FS9NFS", "NinePServer", "FS9KitAdapter"]),
+            dependencies: ["NineP", "NinePClient", "FS9Core", "FS9NFS", "NinePServer"]),
         .target(name: "NineP"),
         .target(name: "NinePClient", dependencies: ["NineP"]),
         .target(name: "NinePServer", dependencies: ["NineP"]),

@@ -189,6 +189,7 @@ extension FS9Volume: FSVolume.Operations {
     }
 
     func activate(options: FSTaskOptions, replyHandler reply: @escaping (FSItem?, (any Error)?) -> Void) {
+        let reply = sendable(reply)
         // Returns the root and nothing else. Anything that can fail — dialling
         // the server, the 9P attach — has already happened in `loadResource`,
         // because a throw from here wedges the resource URL until `fskitd` is
@@ -199,6 +200,7 @@ extension FS9Volume: FSVolume.Operations {
     }
 
     func deactivate(options: FSDeactivateOptions = [], replyHandler reply: @escaping ((any Error)?) -> Void) {
+        let reply = sendable(reply)
         Task { [self] in
             await shutdown()
             reply(nil)
@@ -206,10 +208,12 @@ extension FS9Volume: FSVolume.Operations {
     }
 
     func mount(options: FSTaskOptions, replyHandler reply: @escaping ((any Error)?) -> Void) {
+        let reply = sendable(reply)
         reply(nil)
     }
 
     func unmount(replyHandler reply: @escaping () -> Void) {
+        let reply = sendable(reply)
         Task { [self] in
             await shutdown()
             reply()
@@ -217,6 +221,7 @@ extension FS9Volume: FSVolume.Operations {
     }
 
     func synchronize(flags: FSSyncFlags, replyHandler reply: @escaping ((any Error)?) -> Void) {
+        let reply = sendable(reply)
         // On a URL-backed volume FSKit never calls this (FB24419870): fsync(2),
         // F_FULLFSYNC and sync(8) all return success without reaching the
         // module. It is implemented anyway so that durability works the day the
@@ -232,6 +237,7 @@ extension FS9Volume: FSVolume.Operations {
     }
 
     func reclaimItem(_ item: FSItem, replyHandler reply: @escaping ((any Error)?) -> Void) {
+        let reply = sendable(reply)
         guard let item = try? resolve(item) else { return reply(fs9Error(errno: EINVAL)) }
         guard item !== rootItem else { return reply(nil) }
         items.remove(item.node)
@@ -245,6 +251,7 @@ extension FS9Volume: FSVolume.Operations {
         named name: FSFileName, inDirectory directory: FSItem,
         replyHandler reply: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             let directory = try resolve(directory)
             guard directory.isDirectory else { throw FSError.notDirectory }
@@ -273,6 +280,7 @@ extension FS9Volume: FSVolume.Operations {
         _ desiredAttributes: FSItem.GetAttributesRequest, of item: FSItem,
         replyHandler reply: @escaping (FSItem.Attributes?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         // `desiredAttributes` is deliberately ignored: everything is filled in
         // regardless. See `FSItem.Attributes.init(fs9:)`.
         do {
@@ -293,6 +301,7 @@ extension FS9Volume: FSVolume.Operations {
         _ newAttributes: FSItem.SetAttributesRequest, on item: FSItem,
         replyHandler reply: @escaping (FSItem.Attributes?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             let item = try resolve(item)
             // FSKit never reads back `consumedAttributes` (FB24419894), so a
@@ -332,6 +341,7 @@ extension FS9Volume: FSVolume.Operations {
         attributes: FSItem.GetAttributesRequest?, packer: FSDirectoryEntryPacker,
         replyHandler reply: @escaping (FSDirectoryVerifier, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         // Verifier zero throughout: 9P gives no directory generation number, so
         // there is nothing to verify a cookie against and claiming otherwise
         // would make the kernel restart listings it did not need to.
@@ -383,6 +393,7 @@ extension FS9Volume: FSVolume.Operations {
     func readSymbolicLink(
         _ item: FSItem, replyHandler reply: @escaping (FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             let item = try resolve(item)
             Task { [self] in
@@ -402,6 +413,7 @@ extension FS9Volume: FSVolume.Operations {
         attributes newAttributes: FSItem.SetAttributesRequest,
         replyHandler reply: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             let directory = try resolve(directory)
@@ -448,6 +460,7 @@ extension FS9Volume: FSVolume.Operations {
         attributes newAttributes: FSItem.SetAttributesRequest, linkContents contents: FSFileName,
         replyHandler reply: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             let directory = try resolve(directory)
@@ -473,6 +486,7 @@ extension FS9Volume: FSVolume.Operations {
         to item: FSItem, named name: FSFileName, inDirectory directory: FSItem,
         replyHandler reply: @escaping (FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             guard vfs.protocolVersion.isLinux else {
@@ -498,6 +512,7 @@ extension FS9Volume: FSVolume.Operations {
         _ item: FSItem, named name: FSFileName, fromDirectory directory: FSItem,
         replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             let item = try resolve(item)
@@ -529,6 +544,7 @@ extension FS9Volume: FSVolume.Operations {
         overItem: FSItem?,
         replyHandler reply: @escaping (FSFileName?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             let item = try resolve(item)
@@ -569,6 +585,7 @@ extension FS9Volume: FSVolume.OpenCloseOperations {
         _ item: FSItem, modes: FSVolume.OpenModes,
         replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             let item = try resolve(item)
             // Validate here so `open(2)` fails at open time rather than at the
@@ -587,6 +604,7 @@ extension FS9Volume: FSVolume.OpenCloseOperations {
         _ item: FSItem, modes: FSVolume.OpenModes,
         replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         guard let item = try? resolve(item) else { return reply(fs9Error(errno: EINVAL)) }
         guard item.releaseOpen() else { return reply(nil) }
         Task { [self] in
@@ -606,6 +624,7 @@ extension FS9Volume: FSVolume.ReadWriteOperations {
         from item: FSItem, at offset: off_t, length: Int, into buffer: FSMutableFileDataBuffer,
         replyHandler reply: @escaping (Int, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             let item = try resolve(item)
             guard offset >= 0 else { throw FSError.invalidArgument }
@@ -638,6 +657,7 @@ extension FS9Volume: FSVolume.ReadWriteOperations {
         contents: Data, to item: FSItem, at offset: off_t,
         replyHandler reply: @escaping (Int, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         do {
             guard !readOnly else { throw fs9ReadOnlyError() }
             let item = try resolve(item)
@@ -670,6 +690,7 @@ extension FS9Volume: FSVolume.ItemDeactivation {
     func deactivateItem(
         _ item: FSItem, replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         guard let item = try? resolve(item), item !== rootItem else { return reply(nil) }
         Task { [self] in
             // Drop the open fid but keep the item interned: FSKit may still

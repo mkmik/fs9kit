@@ -69,6 +69,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
         resource: FSResource,
         replyHandler reply: @escaping (FSProbeResult?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         guard let url = Self.url(of: resource),
               let spec = try? MountSpec.parse(url.absoluteString) else {
             return reply(.notRecognized, nil)
@@ -86,6 +87,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
         resource: FSResource, options: FSTaskOptions,
         replyHandler reply: @escaping (FSVolume?, (any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         guard let url = Self.url(of: resource) else {
             Logger.fs9kit.error("loadResource: resource carries no URL")
             return reply(nil, fs9Error(errno: EINVAL))
@@ -146,6 +148,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
         resource: FSResource, options: FSTaskOptions,
         replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
+        let reply = sendable(reply)
         // Reset to `.ready`, or mounting the same URL again fails with
         // "Resource busy" ("resource state is 5") until `fskitd` is killed —
         // FB24419932, and the usual trigger is one failed mount attempt.

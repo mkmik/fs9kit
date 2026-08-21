@@ -1,6 +1,5 @@
 import Foundation
 import FS9NFS
-import FS9KitAdapter
 
 #if canImport(Darwin)
 import Darwin
@@ -126,10 +125,6 @@ enum Doctor {
             atPath: "/System/Library/Frameworks/FSKit.framework")
         check(framework, "FSKit.framework present")
 
-        // A build made against an older SDK has no backend in it at all, which
-        // otherwise looks exactly like one that does until the mount fails.
-        check(FSKitBackend.isCompiledIn, "this build contains the FSKit backend",
-              detail: FSKitBackend.absenceReason ?? "")
 
         let daemon = FileManager.default.fileExists(atPath: "/usr/libexec/fskitd")
         check(daemon, "fskitd present")
@@ -144,7 +139,7 @@ enum Doctor {
                   + "→ File System Extensions"
                 : "build and run the app in macos/ first")
 
-        if newEnough && framework && FSKitBackend.isCompiledIn && app && enabled == true {
+        if newEnough && framework && app && enabled == true {
             print("       → try: sudo mount -F -t fs9kit 9p://host:564/ /Volumes/nine")
         } else {
             print("       → not usable yet; see macos/README.md.")
