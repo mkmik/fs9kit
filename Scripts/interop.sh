@@ -60,7 +60,8 @@ wait_for_port() {
 
 run_case() {
     local name="$1" port="$2" version="$3" offer="$4"
-    local log; log="$(mktemp "${TMPDIR:-/tmp}/fs9kit-interop.XXXXXX.log")"
+    # The Xs have to be last: BSD mktemp does not accept a suffix after them.
+    local log; log="$(mktemp "${TMPDIR:-/tmp}/fs9kit-interop-$name.XXXXXX")"
     make_fixture >/dev/null
     echo "=== $name on 127.0.0.1:$port (expecting $version), exporting $fixture"
 
