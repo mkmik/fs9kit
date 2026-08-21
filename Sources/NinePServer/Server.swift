@@ -107,11 +107,9 @@ public final class NinePServer: @unchecked Sendable {
 
         quiesced.lock()
         let deadline = Date().addingTimeInterval(5)
-        while liveThreadCount > 0, quiesced.wait(until: deadline) {}
+        while liveThreads > 0, quiesced.wait(until: deadline) {}
         quiesced.unlock()
     }
-
-    private var liveThreadCount: Int { lock.withLock { liveThreads } }
 
     // MARK: - Listening
 
@@ -236,16 +234,20 @@ public final class NinePServer: @unchecked Sendable {
             session: NinePSession(fileSystem: fileSystem, configuration: configuration),
             configuration: configuration)
         connection.run()
-        lock.withLock { connections.remove(fd) }
+        lock.withLock { _ = connections.remove(fd) }
         sysClose(fd)
     }
 
+    /// `liveThreads` is guarded by `quiesced` rather than `lock` so that the
+    /// wait in ``stop()`` cannot miss a wakeup.
     private func spawn(_ body: @escaping @Sendable () -> Void) {
-        lock.withLock { liveThreads += 1 }
+        quiesced.lock()
+        liveThreads += 1
+        quiesced.unlock()
         let thread = Thread { [quiesced] in
             body()
-            self.lock.withLock { self.liveThreads -= 1 }
             quiesced.lock()
+            self.liveThreads -= 1
             quiesced.broadcast()
             quiesced.unlock()
         }

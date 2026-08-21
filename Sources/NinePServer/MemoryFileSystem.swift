@@ -44,6 +44,27 @@ public final class MemoryFileSystem: NinePFileServer, @unchecked Sendable {
 
         var isDirectory: Bool { mode & PosixFileType.mask == PosixFileType.dir }
         var isSymlink: Bool { mode & PosixFileType.mask == PosixFileType.lnk }
+
+        func qid() -> Qid {
+            Qid(kind: FileEntry.qidKind(forMode: mode), version: version, path: ino)
+        }
+
+        func entry(named name: String) -> FileEntry {
+            let size: UInt64 = isDirectory
+                ? 4096
+                : (isSymlink ? UInt64(target.utf8.count) : UInt64(content.count))
+            // A directory's link count is itself, its parent's entry for it and
+            // one per subdirectory, the way POSIX filesystems report it.
+            let links: UInt64 = isDirectory
+                ? UInt64(2 + children.values.filter { $0.isDirectory }.count)
+                : linkCount
+
+            return FileEntry(
+                name: name, qid: qid(), mode: mode, uid: uid, gid: gid,
+                ownerName: ownerName, groupName: groupName, nlink: links, size: size,
+                atime: atime, mtime: mtime, ctime: ctime,
+                symlinkTarget: isSymlink ? target : nil)
+        }
     }
 
     /// `f_type` reported by statfs: Linux's V9FS_MAGIC, so a mounted client
@@ -479,23 +500,5 @@ public final class MemoryFileSystem: NinePFileServer, @unchecked Sendable {
 
         func sync() throws {}
         func close() {}
-    }
-}
-
-private extension MemoryFileSystem.Node {
-    func qid() -> Qid {
-        Qid(kind: FileEntry.qidKind(forMode: mode), version: version, path: ino)
-    }
-
-    func entry(named name: String) -> FileEntry {
-        let size: UInt64 = isDirectory ? 4096 : (isSymlink ? UInt64(target.utf8.count) : UInt64(content.count))
-        let links: UInt64 = isDirectory
-            ? UInt64(2 + children.values.filter { $0.isDirectory }.count)
-            : linkCount
-        return FileEntry(
-            name: name, qid: qid(), mode: mode, uid: uid, gid: gid,
-            ownerName: ownerName, groupName: groupName, nlink: links, size: size,
-            atime: atime, mtime: mtime, ctime: ctime,
-            symlinkTarget: isSymlink ? target : nil)
     }
 }

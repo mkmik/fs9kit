@@ -7,13 +7,16 @@ let package = Package(
     products: [
         .library(name: "NineP", targets: ["NineP"]),
         .library(name: "NinePClient", targets: ["NinePClient"]),
+        .library(name: "NinePServer", targets: ["NinePServer"]),
         .library(name: "FS9Core", targets: ["FS9Core"]),
     ],
     targets: [
         .target(name: "NineP"),
         .target(name: "NinePClient", dependencies: ["NineP"]),
+        .target(name: "NinePServer", dependencies: ["NineP"]),
         .target(name: "FS9Core", dependencies: ["NinePClient"]),
         .testTarget(name: "NinePTests", dependencies: ["NineP"]),
+        .testTarget(name: "NinePServerTests", dependencies: ["NinePServer", "NineP"]),
         .testTarget(name: "NinePClientTests", dependencies: ["NinePClient"]),
     ]
 )

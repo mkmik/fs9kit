@@ -56,6 +56,13 @@ public final class NinePSession: @unchecked Sendable {
         }
     }
 
+    /// Builds the error reply for `error` in whichever shape the negotiated
+    /// dialect uses. The framing layer needs this for messages that never
+    /// reach ``handle(_:)``, such as one that fails to decode.
+    public func errorReply(tag: Tag, _ error: NinePServerError) -> Frame {
+        lock.withLock { errorFrame(tag: tag, error) }
+    }
+
     /// Releases every fid. Called when the connection goes away.
     public func close() {
         lock.withLock {
@@ -666,16 +673,10 @@ public final class NinePSession: @unchecked Sendable {
 
     private func snapshot(of path: FilePath, entry: FileEntry, root: FilePath) throws -> DirectorySnapshot {
         let children = try fileSystem.list(path)
-        let parentEntry: FileEntry
-        if path == root, let parent = path.parent {
-            // At the attach point `..` is itself, matching the walk rule above.
-            parentEntry = entry
-            _ = parent
-        } else if let parent = path.parent {
-            parentEntry = (try? fileSystem.entry(at: parent)) ?? entry
-        } else {
-            parentEntry = entry
-        }
+        // At (or above) the attach point `..` is the directory itself, which
+        // is the same rule Twalk follows.
+        let parentPath = path == root ? nil : path.parent
+        let parentEntry = parentPath.flatMap { try? fileSystem.entry(at: $0) } ?? entry
 
         var dirents: [Dirent] = []
         dirents.append(Dirent(qid: entry.qid, offset: 1, type: DirentType.dir, name: "."))

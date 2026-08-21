@@ -88,13 +88,14 @@ func sysRename(_ from: String, _ to: String) -> Int32 {
 }
 
 func sysReadlink(_ path: String) -> String? {
-    var buffer = [CChar](repeating: 0, count: sysPathMax)
+    var buffer = [UInt8](repeating: 0, count: sysPathMax)
     let n = path.withCString { p in
-        buffer.withUnsafeMutableBufferPointer { readlink(p, $0.baseAddress!, $0.count - 1) }
+        buffer.withUnsafeMutableBytes { raw in
+            readlink(p, raw.baseAddress!.assumingMemoryBound(to: CChar.self), raw.count - 1)
+        }
     }
     guard n >= 0 else { return nil }
-    buffer[n] = 0
-    return String(cString: buffer)
+    return String(decoding: buffer[0..<n], as: UTF8.self)
 }
 
 func sysRealpath(_ path: String) -> String? {
@@ -109,9 +110,8 @@ let sysUtimeNow = Int((1 << 30) - 1)
 let sysUtimeOmit = Int((1 << 30) - 2)
 
 func sysUtimensat(_ path: String, _ times: [timespec]) -> Int32 {
-    var t = times
-    return path.withCString { p in
-        t.withUnsafeBufferPointer { utimensat(AT_FDCWD, p, $0.baseAddress, 0) }
+    path.withCString { p in
+        times.withUnsafeBufferPointer { utimensat(AT_FDCWD, p, $0.baseAddress, 0) }
     }
 }
 
@@ -143,10 +143,9 @@ func sysListDirectory(_ path: String) throws -> [String] {
     var names: [String] = []
     while let entry = readdir(dir) {
         var raw = entry.pointee
+        let capacity = MemoryLayout.size(ofValue: raw.d_name)
         let name = withUnsafePointer(to: &raw.d_name) { tuple in
-            tuple.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: raw.d_name)) {
-                String(cString: $0)
-            }
+            tuple.withMemoryRebound(to: CChar.self, capacity: capacity) { String(cString: $0) }
         }
         if name == "." || name == ".." { continue }
         names.append(name)
