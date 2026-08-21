@@ -28,6 +28,7 @@ log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 # a process still holding that pipe keeps the CI step alive after the script
 # has finished, which reads as a hang rather than a result.
 mount_log=""
+server_log=""
 ok()   { printf '   ok   %s\n' "$*"; }
 fail() { printf '   FAIL %s\n' "$*"; failures=$((failures + 1)); }
 
@@ -53,6 +54,7 @@ cleanup() {
     [[ -n "$mount_pid" ]] && kill "$mount_pid" 2>/dev/null
     [[ -n "$mount_log" && -f "$mount_log" ]] && { echo "--- fs9p mount log"; cat "$mount_log"; rm -f "$mount_log"; }
     [[ -n "$server_pid" ]] && kill "$server_pid" 2>/dev/null
+    [[ -n "$server_log" && -f "$server_log" ]] && { echo "--- 9P server log"; cat "$server_log"; rm -f "$server_log"; }
     sleep 0.3
     [[ -n "$mountpoint" ]] && rmdir "$mountpoint" 2>/dev/null
     [[ -n "$fixture" ]] && rm -rf "$fixture"
@@ -85,14 +87,15 @@ big_sum="$(shasum -a 256 "$fixture/big.bin" | cut -d' ' -f1)"
 # ---------------------------------------------------------------- serve
 
 log "Starting the 9P server ($server)"
+server_log="$(mktemp "${TMPDIR:-/tmp}/fs9kit-server.XXXXXX")"
 case "$server" in
     fs9p)
-        "$fs9p" serve "$fixture" --port="$port" &
+        "$fs9p" serve "$fixture" --port="$port" > "$server_log" 2>&1 &
         server_pid=$!
         ;;
     p9ufs)
         command -v p9ufs >/dev/null || go install github.com/hugelgupf/p9/cmd/p9ufs@latest
-        "$(go env GOPATH)/bin/p9ufs" -root "$fixture" "127.0.0.1:$port" &
+        "$(go env GOPATH)/bin/p9ufs" -root "$fixture" "127.0.0.1:$port" > "$server_log" 2>&1 &
         server_pid=$!
         ;;
     *) echo "unknown server '$server'" >&2; exit 2 ;;

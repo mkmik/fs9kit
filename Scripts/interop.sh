@@ -65,9 +65,11 @@ run_case() {
     make_fixture >/dev/null
     echo "=== $name on 127.0.0.1:$port (expecting $version), exporting $fixture"
 
+    # Redirected rather than inheriting the caller's stdout: a background
+    # process holding that pipe keeps a CI step alive after the script exits.
     case "$name" in
-        p9ufs)    p9ufs -root "$fixture" "127.0.0.1:$port" & ;;
-        export9p) export9p -noperm -dir "$fixture" -address "127.0.0.1:$port" & ;;
+        p9ufs)    p9ufs -root "$fixture" "127.0.0.1:$port" > "$log.server" 2>&1 & ;;
+        export9p) export9p -noperm -dir "$fixture" -address "127.0.0.1:$port" > "$log.server" 2>&1 & ;;
         *) echo "unknown server $name" >&2; return 1 ;;
     esac
     server_pid=$!
@@ -81,12 +83,14 @@ run_case() {
     swift test --filter InteropTests 2>&1 | tee "$log" || {
         echo "--- failures against $name"
         grep -E "✘|recorded an issue" "$log" | grep -v " skipped\.$" | head -40
+        echo "--- $name server log"; cat "$log.server" 2>/dev/null | head -20
         return 1
     }
 
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
     server_pid=""
+    rm -f "$log" "$log.server"
     rm -rf "$fixture"; fixture=""
 }
 
