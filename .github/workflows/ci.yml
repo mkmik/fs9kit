@@ -26,7 +26,14 @@ jobs:
       - name: Build
         run: swift build --build-tests
       - name: Test
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::failures"
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | head -60
+            echo "::endgroup::"
+            exit 1
+          }
 
   macos:
     name: macOS (${{ matrix.runner }})
@@ -45,8 +52,18 @@ jobs:
           swift --version
       - name: Build
         run: swift build --build-tests
+      # swift-testing interleaves failures with several hundred passing lines,
+      # and a truncated log usually keeps the wrong end. Repeat the failures at
+      # the bottom so one look at the tail says which test broke.
       - name: Test
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::failures"
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | head -60
+            echo "::endgroup::"
+            exit 1
+          }
 
   # Runs the client against 9P servers written by other people, in another
   # language, from the same specs. A client tested only against its own server

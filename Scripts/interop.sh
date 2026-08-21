@@ -12,6 +12,7 @@
 # Requires a Go toolchain on PATH. Both servers are pure Go and build for
 # darwin/arm64 and linux as-is.
 set -euo pipefail
+set -o pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -59,6 +60,7 @@ wait_for_port() {
 
 run_case() {
     local name="$1" port="$2" version="$3" offer="$4"
+    local log; log="$(mktemp "${TMPDIR:-/tmp}/fs9kit-interop.XXXXXX.log")"
     make_fixture >/dev/null
     echo "=== $name on 127.0.0.1:$port (expecting $version), exporting $fixture"
 
@@ -75,7 +77,11 @@ run_case() {
     FS9KIT_9P_VERSION="$version" \
     FS9KIT_9P_NAME="$name" \
     FS9KIT_9P_OFFER="$offer" \
-    swift test --filter InteropTests
+    swift test --filter InteropTests 2>&1 | tee "$log" || {
+        echo "--- failures against $name"
+        grep -E "✘|recorded an issue" "$log" | head -40
+        return 1
+    }
 
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
