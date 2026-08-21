@@ -23,6 +23,11 @@ mount_pid=""
 failures=0
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# Anything backgrounded gets its own log file rather than the step's stdout:
+# a process still holding that pipe keeps the CI step alive after the script
+# has finished, which reads as a hang rather than a result.
+mount_log=""
 ok()   { printf '   ok   %s\n' "$*"; }
 fail() { printf '   FAIL %s\n' "$*"; failures=$((failures + 1)); }
 
@@ -46,6 +51,7 @@ cleanup() {
         sudo umount -f "$mountpoint" 2>/dev/null
     fi
     [[ -n "$mount_pid" ]] && kill "$mount_pid" 2>/dev/null
+    [[ -n "$mount_log" && -f "$mount_log" ]] && { echo "--- fs9p mount log"; cat "$mount_log"; rm -f "$mount_log"; }
     [[ -n "$server_pid" ]] && kill "$server_pid" 2>/dev/null
     sleep 0.3
     [[ -n "$mountpoint" ]] && rmdir "$mountpoint" 2>/dev/null
@@ -100,7 +106,8 @@ done
 # ---------------------------------------------------------------- mount
 
 log "Mounting on $mountpoint"
-"$fs9p" mount "tcp!127.0.0.1!$port" "$mountpoint" &
+mount_log="$(mktemp "${TMPDIR:-/tmp}/fs9kit-mount.XXXXXX")"
+"$fs9p" mount "tcp!127.0.0.1!$port" "$mountpoint" > "$mount_log" 2>&1 &
 mount_pid=$!
 
 mounted=no
@@ -110,7 +117,8 @@ for _ in $(seq 1 150); do
     sleep 0.2
 done
 if [[ "$mounted" != yes ]]; then
-    echo "the filesystem never mounted" >&2
+    echo "the filesystem never mounted; fs9p said:" >&2
+    cat "$mount_log" >&2
     mount | grep -i nfs || true
     exit 1
 fi

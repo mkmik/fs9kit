@@ -16,6 +16,7 @@ concurrency:
 jobs:
   linux:
     name: Linux (Swift ${{ matrix.swift }})
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     container: swift:${{ matrix.swift }}
     strategy:
@@ -51,6 +52,7 @@ jobs:
 
   macos:
     name: macOS (${{ matrix.runner }})
+    timeout-minutes: 25
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -95,6 +97,7 @@ jobs:
   # proves very little: both ends can share the same misreading.
   interop:
     name: Interop (${{ matrix.runner }})
+    timeout-minutes: 25
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -119,6 +122,7 @@ jobs:
   # MDM route — so CI builds the bundle and asserts on what it produced.
   fskit-bundle:
     name: FSKit bundle (macos-26)
+    timeout-minutes: 25
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +134,7 @@ jobs:
   # own code; this talks to the kernel.
   mount-e2e:
     name: Mount end to end (${{ matrix.runner }})
+    timeout-minutes: 25
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -147,6 +152,7 @@ jobs:
   # whole stack is proven against an implementation we did not write.
   mount-e2e-interop:
     name: Mount a third-party server (${{ matrix.runner }})
+    timeout-minutes: 25
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -168,6 +174,7 @@ jobs:
     # Findings are written up in docs/DECISIONS.md; re-run this by hand when a
     # runner image changes rather than on every push.
     if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 25
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     strategy:
