@@ -96,6 +96,15 @@ public final class NinePSession: @unchecked Sendable {
     private let socket: StreamSocket
     private let codec: MessageCodec
     private let writeLock = NSLock()
+    /// Requests are written here, never on the thread that asked for them.
+    ///
+    /// `socket.writeFully` blocks, and `rpc`'s continuation body runs on
+    /// whichever thread called it — a cooperative pool thread, of which there
+    /// are roughly as many as there are cores. If the peer's receive window
+    /// fills, blocking those threads stops every task in the process, so
+    /// nothing is left to read replies and unblock the write. Off the pool it
+    /// goes; the queue being serial also preserves frame boundaries.
+    private let writeQueue = DispatchQueue(label: "fs9kit.9p.session.write")
     private let lock = NSLock()
     private var reader: Thread?
 
@@ -337,14 +346,16 @@ public final class NinePSession: @unchecked Sendable {
                 pending[tag] = continuation
                 lock.unlock()
 
-                do {
-                    try send(Frame(tag: tag, message: message))
-                } catch {
-                    lock.lock()
-                    let c = pending.removeValue(forKey: tag)
-                    if c != nil { recycle(tag) }
-                    lock.unlock()
-                    c?.resume(throwing: error)
+                writeQueue.async { [self] in
+                    do {
+                        try send(Frame(tag: tag, message: message))
+                    } catch {
+                        lock.lock()
+                        let c = pending.removeValue(forKey: tag)
+                        if c != nil { recycle(tag) }
+                        lock.unlock()
+                        c?.resume(throwing: error)
+                    }
                 }
             }
         } onCancel: {
@@ -407,14 +418,19 @@ public final class NinePSession: @unchecked Sendable {
         lock.lock()
         flushing[flushTag] = tag
         lock.unlock()
-        do {
-            try send(Frame(tag: flushTag, message: .tflush(oldtag: tag)))
-        } catch {
-            lock.lock()
-            flushing.removeValue(forKey: flushTag)
-            recycle(flushTag)
-            lock.unlock()
-            failLocally(tag)
+        // Enqueued rather than written here for the same reason as `rpc`: this
+        // runs as a cancellation handler on a cooperative thread. Ordering
+        // behind the request it flushes comes free from the serial queue.
+        writeQueue.async { [self] in
+            do {
+                try send(Frame(tag: flushTag, message: .tflush(oldtag: tag)))
+            } catch {
+                lock.lock()
+                flushing.removeValue(forKey: flushTag)
+                recycle(flushTag)
+                lock.unlock()
+                failLocally(tag)
+            }
         }
     }
 

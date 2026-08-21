@@ -112,6 +112,9 @@ struct TestDirectoryPage {
 /// Typed wrappers around the two programs.
 struct NFSTestClient {
     let connection: RPCTestConnection
+    /// When set, calls do not wait for the previous reply — see
+    /// `RPCTestConnection.startPipelining()`.
+    var pipelined = false
 
     static let nfs = NFSConstants.program
     static let nfsVersion = NFSConstants.version
@@ -119,9 +122,13 @@ struct NFSTestClient {
     static let mountVersion = MountConstants.version
 
     func nfsCall(_ procedure: UInt32, _ arguments: [UInt8] = []) async throws -> XDRDecoder {
-        let reply = try await connection.call(
-            program: Self.nfs, version: Self.nfsVersion,
-            procedure: procedure, arguments: arguments)
+        let reply = pipelined
+            ? try await connection.pipelinedCall(
+                program: Self.nfs, version: Self.nfsVersion,
+                procedure: procedure, arguments: arguments)
+            : try await connection.call(
+                program: Self.nfs, version: Self.nfsVersion,
+                procedure: procedure, arguments: arguments)
         guard reply.isSuccess else {
             throw RPCTestError.malformed("RPC rejected: accept=\(reply.acceptStatus ?? 99)")
         }

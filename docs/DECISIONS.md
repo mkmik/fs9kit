@@ -161,3 +161,28 @@ the life of a mount — NFS in particular hands file handles back for hours.
 Node identifiers are allocated by the VFS, and NFS file handles additionally
 carry a per-server-instance boot verifier so a restarted bridge reports
 `ESTALE` instead of silently resolving a handle to the wrong file.
+
+---
+
+## 6. No blocking socket write ever runs on the concurrency pool
+
+**Decided.** Both servers hand every outbound write to a dedicated serial
+queue: `RPCServer.Connection.writeQueue` for NFS replies, and
+`NinePSession.writeQueue` for 9P requests.
+
+This is not tidiness, it is the fix for a deadlock that only a real kernel
+client produced. Writing a reply blocks until the peer takes the bytes, and a
+kernel NFS client with several large READs outstanding stops taking them. The
+handler that produces a reply runs in a `Task`, so it was blocking a thread of
+the Swift cooperative pool — which holds roughly one thread per core. A hosted
+macOS runner has three. Three simultaneous stalled replies took the whole pool,
+and with it every task in the process: nothing was left to drain the socket, so
+the writes never completed and the mount never recovered.
+
+The end-to-end mount test found it and nothing else could have. Every serial
+operation passed — read, write, rename, symlink, chmod, truncate, a 4 MiB
+round trip — and the job then hung on the eight-concurrent-readers step until
+CI killed it, twenty minutes later, with no output. `Tests/FS9NFSTests/
+ConcurrencyTests.swift` now reproduces it in process against a deliberately
+deaf client; note that under the bug that test *hangs* rather than fails,
+because a wedged pool cannot run swift-testing's own time limit either.

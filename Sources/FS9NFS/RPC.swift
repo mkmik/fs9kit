@@ -568,7 +568,19 @@ public final class RPCServer: @unchecked Sendable {
     fileprivate final class Connection: @unchecked Sendable {
         private let fd: Int32
         private unowned let server: RPCServer
-        private let writeLock = NSLock()
+        /// Every reply is written here, never on the thread that produced it.
+        ///
+        /// A reply write is a blocking `send`, and it blocks for real once the
+        /// peer stops draining — a kernel NFS client with several large READs
+        /// outstanding does exactly that. The handler that produces a reply
+        /// runs in a `Task`, so it is on a cooperative pool thread, and that
+        /// pool has about one thread per core. Blocking a few of them at once
+        /// wedges the entire Swift concurrency runtime: no task anywhere can
+        /// run, so nothing ever drains the socket, so the writes never finish.
+        /// Handing the write to a queue of its own keeps the pool free, and
+        /// being serial it also keeps two replies from being spliced together
+        /// on the wire.
+        private let writeQueue: DispatchQueue
         private let state = NSCondition()
         private var inFlight = 0
         private var closed = false
@@ -576,6 +588,7 @@ public final class RPCServer: @unchecked Sendable {
         init(fd: Int32, server: RPCServer) {
             self.fd = fd
             self.server = server
+            self.writeQueue = DispatchQueue(label: "fs9kit.nfs.rpc.write.\(fd)")
         }
 
         func shutdown() {
@@ -628,8 +641,9 @@ public final class RPCServer: @unchecked Sendable {
                 call = try RPCMessage.decodeCall(
                     message, argumentLimit: server.options.maximumRecordSize)
             } catch let RPCDecodeError.versionMismatch(xid, _) {
-                send(RPCMessage.rpcMismatch(xid: xid, low: RPCConstants.version,
-                                            high: RPCConstants.version))
+                beginRequest()
+                enqueue(RPCMessage.rpcMismatch(xid: xid, low: RPCConstants.version,
+                                               high: RPCConstants.version))
                 return
             } catch {
                 // No usable xid, so no reply is possible; ignore the message
@@ -641,10 +655,18 @@ public final class RPCServer: @unchecked Sendable {
             Task { [weak self] in
                 guard let self else { return }
                 let reply = await self.server.dispatch(call)
-                // Both of these are synchronous on purpose: NSCondition may not
-                // be locked from an async context, and neither call can suspend.
-                self.send(reply)
-                self.endRequest()
+                self.enqueue(reply)
+            }
+        }
+
+        /// Hands a finished reply to the writer queue.
+        ///
+        /// The request stays counted as in flight until the bytes are gone, so
+        /// ``run()`` still cannot close the descriptor out from under a write.
+        private func enqueue(_ payload: [UInt8]) {
+            writeQueue.async { [self] in
+                send(payload)
+                endRequest()
             }
         }
 
@@ -661,12 +683,10 @@ public final class RPCServer: @unchecked Sendable {
             state.unlock()
         }
 
-        /// Writes one framed reply. Replies interleave arbitrarily, so the lock
+        /// Writes one framed reply. Only ever called on ``writeQueue``, which
         /// is what keeps two of them from being spliced together on the wire.
         private func send(_ payload: [UInt8]) {
             let framed = rpcFrame(payload)
-            writeLock.lock()
-            defer { writeLock.unlock() }
             state.lock()
             let isClosed = closed
             state.unlock()

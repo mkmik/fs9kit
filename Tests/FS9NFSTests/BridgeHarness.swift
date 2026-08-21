@@ -77,11 +77,21 @@ final class TestBridge: @unchecked Sendable {
     /// Opens another TCP connection to the bridge, tracked so it is closed at
     /// teardown rather than leaking a socket.
     func connect(credentials: AuthSysCredentials? = AuthSysCredentials(
-        stamp: 1, machineName: "fs9kit-test", uid: 0, gid: 0, groups: [0])
+        stamp: 1, machineName: "fs9kit-test", uid: 0, gid: 0, groups: [0]),
+        receiveBufferSize: Int32? = nil
     ) throws -> NFSTestClient {
-        let extra = NFSTestClient(connection: try RPCTestConnection(port: port, credentials: credentials))
+        let extra = NFSTestClient(connection: try RPCTestConnection(
+            port: port, credentials: credentials, receiveBufferSize: receiveBufferSize))
         extraClients.append(extra)
         return extra
+    }
+
+    /// Another connection, in pipelined mode: many requests may be in flight
+    /// on it at once, the way the kernel's client drives one.
+    func connectPipelined() throws -> NFSTestClient {
+        let extra = try connect()
+        extra.connection.startPipelining()
+        return NFSTestClient(connection: extra.connection, pipelined: true)
     }
 
     /// Tears everything down. Synchronous so it can be used from `defer`, and

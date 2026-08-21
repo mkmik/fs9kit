@@ -67,13 +67,24 @@ final class RPCTestConnection: @unchecked Sendable {
     private let fd: Int32
     private let queue: DispatchQueue
     private var leftover: [UInt8] = []
+    private let xidLock = NSLock()
     private var nextXID: UInt32 = 0x1000_0000
     private let credentials: AuthSysCredentials?
 
+    // Pipelined mode: one reader thread owns the socket's read side and hands
+    // each reply to whoever is waiting on that xid. See `startPipelining()`.
+    private let waiterLock = NSLock()
+    private var waiters: [UInt32: CheckedContinuation<RPCTestReply, any Error>] = [:]
+    private var readerFailure: (any Error)?
+    private var pipelining = false
+
+    /// - Parameter receiveBufferSize: when set, shrinks the socket's receive
+    ///   buffer. A test that wants the *server's* send to block needs the
+    ///   window to fill quickly; the default buffer is megabytes wide.
     init(host: String = "127.0.0.1", port: UInt16,
          credentials: AuthSysCredentials? = AuthSysCredentials(
             stamp: 1, machineName: "fs9kit-test", uid: 501, gid: 20, groups: [20, 12]),
-         timeout: TimeInterval = 10) throws {
+         timeout: TimeInterval = 10, receiveBufferSize: Int32? = nil) throws {
         #if canImport(Darwin)
         let stream = SOCK_STREAM
         #else
@@ -108,6 +119,9 @@ final class RPCTestConnection: @unchecked Sendable {
         }
         _ = withUnsafePointer(to: &tv) {
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, $0, socklen_t(MemoryLayout<timeval>.size))
+        }
+        if var size = receiveBufferSize {
+            _ = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, socklen_t(MemoryLayout<Int32>.size))
         }
         self.fd = fd
         self.credentials = credentials
@@ -152,8 +166,74 @@ final class RPCTestConnection: @unchecked Sendable {
     }
 
     func allocateXID() -> UInt32 {
-        nextXID &+= 1
-        return nextXID
+        xidLock.withLock {
+            nextXID &+= 1
+            return nextXID
+        }
+    }
+
+    // MARK: Pipelining
+
+    /// Starts a reader thread so many calls can be outstanding at once.
+    ///
+    /// This is what the kernel's NFS client does — it does not wait for one
+    /// reply before sending the next request — and it is the one thing the
+    /// request/reply `call` above cannot reproduce, because its reply wait
+    /// occupies the same serial queue the next request would need.
+    ///
+    /// After this, use `pipelinedCall` only: `receive()` would race the reader
+    /// thread for the same bytes.
+    func startPipelining() {
+        waiterLock.lock()
+        guard !pipelining else { waiterLock.unlock(); return }
+        pipelining = true
+        waiterLock.unlock()
+        let thread = Thread { [weak self] in
+            while true {
+                guard let self else { return }
+                do {
+                    let reply = try Self.decodeReply(self.blockingReadRecord())
+                    let waiter = self.waiterLock.withLock { self.waiters.removeValue(forKey: reply.xid) }
+                    waiter?.resume(returning: reply)
+                } catch {
+                    let stranded: [CheckedContinuation<RPCTestReply, any Error>] =
+                        self.waiterLock.withLock {
+                            self.readerFailure = error
+                            let all = Array(self.waiters.values)
+                            self.waiters.removeAll()
+                            return all
+                        }
+                    for waiter in stranded { waiter.resume(throwing: error) }
+                    return
+                }
+            }
+        }
+        thread.stackSize = 512 * 1024
+        thread.start()
+    }
+
+    /// Sends a call and waits for its reply without holding up other calls.
+    func pipelinedCall(program: UInt32, version: UInt32, procedure: UInt32,
+                       arguments: [UInt8] = []) async throws -> RPCTestReply {
+        let id = allocateXID()
+        let payload = encodeCall(xid: id, program: program, version: version,
+                                 procedure: procedure, arguments: arguments)
+        return try await withCheckedThrowingContinuation { continuation in
+            let failure: (any Error)? = waiterLock.withLock {
+                if let readerFailure { return readerFailure }
+                waiters[id] = continuation
+                return nil
+            }
+            if let failure { continuation.resume(throwing: failure); return }
+            queue.async {
+                do {
+                    try self.blockingWrite(self.frame(payload))
+                } catch {
+                    let waiter = self.waiterLock.withLock { self.waiters.removeValue(forKey: id) }
+                    waiter?.resume(throwing: error)
+                }
+            }
+        }
     }
 
     /// Writes raw bytes with no framing, for the record-marking tests.
