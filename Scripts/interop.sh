@@ -79,7 +79,7 @@ run_case() {
     FS9KIT_9P_OFFER="$offer" \
     swift test --filter InteropTests 2>&1 | tee "$log" || {
         echo "--- failures against $name"
-        grep -E "✘|recorded an issue" "$log" | head -40
+        grep -E "✘|recorded an issue" "$log" | grep -v " skipped\.$" | head -40
         return 1
     }
 

@@ -41,7 +41,7 @@ jobs:
           set -o pipefail
           swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::failures"
-            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | head -60
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | grep -v " skipped\.$" | head -60
             echo "::endgroup::"
             exit 1
           }
@@ -82,7 +82,7 @@ jobs:
           set -o pipefail
           swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::failures"
-            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | head -60
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | grep -v " skipped\.$" | head -60
             echo "::endgroup::"
             exit 1
           }

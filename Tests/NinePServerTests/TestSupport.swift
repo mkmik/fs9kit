@@ -110,8 +110,18 @@ func wideTree(count: Int) throws -> MemoryFileSystem {
 }
 
 /// Creates a scratch directory that is removed when `body` returns.
+///
+/// Deliberately short, and rooted at `/tmp` rather than at the per-user
+/// temporary directory. A `sockaddr_un` holds 104 bytes of path on Darwin, and
+/// macOS's `NSTemporaryDirectory()` is something like
+/// `/var/folders/_5/zjnzxgh147qcg3bb5cg2wvqw0000gn/T/` — 48 characters before
+/// anything of ours — so a UUID-named subdirectory leaves no room for a socket
+/// name. Tests that only need files would not care; the one that binds a Unix
+/// socket does.
 func withTemporaryDirectory<T>(_ body: (String) throws -> T) throws -> T {
-    let path = NSTemporaryDirectory() + "/ninep-test-" + UUID().uuidString
+    var name = ""
+    for _ in 0..<8 { name.append("0123456789abcdef".randomElement()!) }
+    let path = "/tmp/9pt-" + name
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: path) }
     return try body(path)
