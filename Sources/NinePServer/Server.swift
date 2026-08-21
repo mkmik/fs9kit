@@ -90,21 +90,37 @@ public final class NinePServer: @unchecked Sendable {
     /// Blocked reads are woken by shutting the sockets down; closing alone is
     /// not enough, because another thread still holds the descriptor.
     public func stop() {
-        let (wasRunning, toClose, paths) = lock.withLock { () -> (Bool, [Int32], [String]) in
-            guard running else { return (false, [], []) }
-            running = false
-            let all = listeners + Array(connections)
-            let paths = unixPaths
-            listeners.removeAll()
-            unixPaths.removeAll()
-            endpoints.removeAll()
-            return (true, all, paths)
-        }
+        let (wasRunning, listenerFDs, connectionFDs, paths) =
+            lock.withLock { () -> (Bool, [Int32], [Int32], [String]) in
+                guard running else { return (false, [], [], []) }
+                running = false
+                let listenerFDs = listeners
+                let connectionFDs = Array(connections)
+                let paths = unixPaths
+                listeners.removeAll()
+                unixPaths.removeAll()
+                endpoints.removeAll()
+                return (true, listenerFDs, connectionFDs, paths)
+            }
         guard wasRunning else { return }
-        for fd in toClose { sysShutdown(fd) }
-        for fd in toClose { sysClose(fd) }
+
+        // Every descriptor is shut down so the thread blocked in `read` on it
+        // wakes up, but only the listeners are closed here.
+        //
+        // A connection's descriptor belongs to the thread serving it, which
+        // closes it once `run()` returns. Closing it here as well would be a
+        // double close, and the window between them is long enough for another
+        // thread to be handed the same number by `accept` or `socket` — after
+        // which the second close silently kills somebody else's live socket.
+        // That showed up as EBADF and as one protocol's bytes arriving on
+        // another protocol's connection.
+        for fd in connectionFDs { sysShutdown(fd) }
+        for fd in listenerFDs { sysShutdown(fd) }
+        for fd in listenerFDs { sysClose(fd) }
         for path in paths { _ = sysUnlink(path) }
 
+        // Waiting for the serving threads is what makes the descriptors above
+        // actually gone by the time this returns.
         quiesced.lock()
         let deadline = Date().addingTimeInterval(5)
         while liveThreads > 0, quiesced.wait(until: deadline) {}

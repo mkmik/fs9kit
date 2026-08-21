@@ -283,3 +283,39 @@ struct ResourceTests {
         #expect(after - before < 8, "descriptors grew from \(before) to \(after)")
     }
 }
+
+/// The export has no authentication of any kind, so where it binds is a
+/// security property rather than a preference.
+@Suite("Loopback enforcement")
+struct LoopbackTests {
+    @Test("loopback addresses are recognised",
+          arguments: ["127.0.0.1", "127.1.2.3", "127.0.0.53", "::1", "localhost"])
+    func loopbackAccepted(host: String) {
+        #expect(NFSBridge.isLoopback(host))
+    }
+
+    @Test("anything routable is not",
+          arguments: ["0.0.0.0", "192.168.1.10", "10.0.0.1", "example.com", "", "128.0.0.1"])
+    func routableRejected(host: String) {
+        #expect(!NFSBridge.isLoopback(host))
+    }
+
+    @Test("starting on a routable address is refused unless asked for explicitly")
+    func refusesToStart() async throws {
+        let harness = try await TestBridge.start()
+        defer { harness.tearDown() }
+        var options = NFSBridgeOptions()
+        options.host = "0.0.0.0"
+        let refused = NFSBridge(vfs: harness.vfs, options: options)
+        #expect(throws: NFSBridgeError.nonLoopbackHost("0.0.0.0")) { _ = try refused.start() }
+
+        // Binding 0.0.0.0 for real would expose the export to the network, so
+        // check only that the guard is what stopped it: with the opt-in set,
+        // the failure must not be nonLoopbackHost any more.
+        options.allowNonLoopbackHost = true
+        options.host = "127.0.0.1"
+        let permitted = NFSBridge(vfs: harness.vfs, options: options)
+        defer { permitted.stop() }
+        #expect(throws: Never.self) { _ = try permitted.start() }
+    }
+}

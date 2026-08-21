@@ -9,12 +9,33 @@
 import Foundation
 import FS9Core
 
+/// Why a bridge refused to start.
+public enum NFSBridgeError: Error, CustomStringConvertible, Equatable {
+    /// Someone asked to listen somewhere other than loopback without saying
+    /// they meant it.
+    case nonLoopbackHost(String)
+
+    public var description: String {
+        switch self {
+        case let .nonLoopbackHost(host):
+            "refusing to serve an unauthenticated NFS export on \(host); "
+                + "set allowNonLoopbackHost if that is really what you want"
+        }
+    }
+}
+
 /// Options for a whole bridge: the export plus where to listen.
 public struct NFSBridgeOptions: Sendable {
     public var export: NFSExportOptions
-    /// Always a loopback address. Binding anywhere else would expose an
-    /// unauthenticated filesystem to the network.
+    /// Where to listen. Enforced to be a loopback address unless
+    /// ``allowNonLoopbackHost`` is set: this server performs no authentication
+    /// whatsoever, so binding it to a routable address would hand the whole
+    /// exported tree to anyone who can reach the port.
     public var host: String
+    /// Deliberately expose the export beyond this machine. There is no
+    /// authentication, so this is only ever right behind something else that
+    /// does the authenticating.
+    public var allowNonLoopbackHost: Bool = false
     /// 0 asks the kernel for a free port, which is the sensible default: the
     /// well-known NFS port 2049 usually needs privileges and may be taken.
     public var port: UInt16
@@ -22,8 +43,10 @@ public struct NFSBridgeOptions: Sendable {
 
     public init(export: NFSExportOptions = NFSExportOptions(),
                 host: String = "127.0.0.1", port: UInt16 = 0,
-                maximumRecordSize: Int = 1 << 21) {
+                maximumRecordSize: Int = 1 << 21,
+                allowNonLoopbackHost: Bool = false) {
         self.export = export
+        self.allowNonLoopbackHost = allowNonLoopbackHost
         self.host = host
         self.port = port
         self.maximumRecordSize = maximumRecordSize
@@ -59,9 +82,20 @@ public final class NFSBridge: @unchecked Sendable {
     }
 
     /// Binds and starts serving, returning the port in use.
-    @discardableResult
     public func start() throws -> UInt16 {
-        try server.start()
+        guard options.allowNonLoopbackHost || NFSBridge.isLoopback(options.host) else {
+            throw NFSBridgeError.nonLoopbackHost(options.host)
+        }
+        return try server.start()
+    }
+
+    /// True for addresses that only this machine can reach: 127.0.0.0/8 and
+    /// the IPv6 loopback.
+    public static func isLoopback(_ host: String) -> Bool {
+        if host == "::1" || host == "localhost" { return true }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) else { return false }
+        return parts[0] == "127"
     }
 
     /// The port NFS and MOUNT are served on, once started.
