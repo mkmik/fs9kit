@@ -23,9 +23,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: Swift version
         run: swift --version
+      # Same reason as the test step: parallel compilation pushes the errors
+      # far above the end of the log, and the end is what survives truncation.
       - name: Build
-        run: swift build --build-tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            echo "::group::build errors"
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -60
+            echo "::endgroup::"
+            exit 1
+          }
       - name: Test
+        shell: bash
         run: |
           set -o pipefail
           swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
@@ -50,12 +61,23 @@ jobs:
           uname -m
           xcodebuild -version
           swift --version
+      # Same reason as the test step: parallel compilation pushes the errors
+      # far above the end of the log, and the end is what survives truncation.
       - name: Build
-        run: swift build --build-tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            echo "::group::build errors"
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -60
+            echo "::endgroup::"
+            exit 1
+          }
       # swift-testing interleaves failures with several hundred passing lines,
       # and a truncated log usually keeps the wrong end. Repeat the failures at
       # the bottom so one look at the tail says which test broke.
       - name: Test
+        shell: bash
         run: |
           set -o pipefail
           swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
