@@ -64,6 +64,10 @@ swift build -c release --product fs9p
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/fs9kit-e2e.XXXXXX")"
 mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/fs9kit-mnt.XXXXXX")"
+# macOS reports mounts under their real path, and /var is a symlink to
+# /private/var, so a mktemp path never matches what `mount` prints.
+mountpoint="$(cd "$mountpoint" && pwd -P)"
+fixture="$(cd "$fixture" && pwd -P)"
 
 mkdir -p "$fixture/dir/nested"
 printf 'hello from 9p\n'      > "$fixture/hello.txt"

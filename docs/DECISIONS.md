@@ -61,7 +61,7 @@ volume in Finder without a loopback NFS server in the picture. Mounting a
 *network* filesystem — one with no block device behind it — became possible only
 in macOS 26 with `FSGenericURLResource`:
 
-    mount -F -t fs9kit 9p://host:564/aname /Volumes/fs9kit
+    mount -F -t fs9kit p9://host:564/aname /Volumes/fs9kit
 
 This was confirmed against Apple's own `mount(8)` source
 (`apple-oss-distributions/diskdev_cmds`, `disklib/fskit_support.m`), whose

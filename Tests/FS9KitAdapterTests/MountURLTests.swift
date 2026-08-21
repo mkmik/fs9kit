@@ -286,3 +286,42 @@ struct MountURLTests {
         }
     }
 }
+
+/// Pins the reason `p9://` is the scheme the documentation tells people to use.
+///
+/// `mount(8)` builds the resource with `[NSURL URLWithString:argv[0]]` before
+/// the extension is reached, so whatever Foundation refuses to parse can never
+/// get to our own parser however lenient that is. RFC 3986 says a scheme
+/// begins with a letter, and Foundation enforces it — which rules out `9p`.
+@Suite("URL scheme viability")
+struct SchemeViabilityTests {
+    @Test("Foundation rejects a scheme that starts with a digit")
+    func digitLeadingSchemeIsInvalid() {
+        #expect(URL(string: "9p://host:564/tree") == nil)
+        #expect(URL(string: "9pfs://host/tree") == nil)
+    }
+
+    @Test("the schemes we tell people to type do parse")
+    func documentedSchemesParse() throws {
+        let tcp = try #require(URL(string: "p9://host:564/tree"))
+        #expect(tcp.scheme == "p9")
+        #expect(tcp.host == "host")
+        #expect(tcp.port == 564)
+
+        let unix = try #require(URL(string: "p9+unix:///tmp/ns/9p"))
+        #expect(unix.scheme == "p9+unix")
+        #expect(unix.path == "/tmp/ns/9p")
+    }
+
+    @Test("every advertised scheme is one our own parser accepts")
+    func advertisedSchemesAreAccepted() throws {
+        for scheme in MountSpec.allSchemes {
+            let target = scheme.hasSuffix("+unix")
+                ? "\(scheme):///tmp/ns/9p"
+                : "\(scheme)://host:564/tree"
+            #expect(throws: Never.self, "\(scheme) did not parse") {
+                _ = try MountSpec.parse(target)
+            }
+        }
+    }
+}

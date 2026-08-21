@@ -174,7 +174,7 @@ extension NFSProgram {
         return (items, eof)
     }
 
-    func readdir(_ d: inout XDRDecoder) async -> [UInt8] {
+    func readdir(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -206,14 +206,15 @@ extension NFSProgram {
             e.bool(false)
             e.bool(result.eof)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
 
-    func readdirPlus(_ d: inout XDRDecoder) async -> [UInt8] {
+    func readdirPlus(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -265,9 +266,10 @@ extension NFSProgram {
             e.bool(false)
             e.bool(result.eof)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }

@@ -72,6 +72,17 @@ jobs:
       - name: Interop against p9ufs (9P2000.L) and export9p (9P2000)
         run: Scripts/interop.sh all
 
+  # The FSKit backend cannot be mounted on a hosted runner — a third-party
+  # module is enabled by a per-user click in System Settings, with no CLI or
+  # MDM route — so CI builds the bundle and asserts on what it produced.
+  fskit-bundle:
+    name: FSKit bundle (macos-26)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app and extension, then check the bundle
+        run: Scripts/fskit-bundle-check.sh
+
   # The reality check: mount a 9P server through the kernel's own NFS client
   # and use it with ordinary tools. Everything else in the suite talks to our
   # own code; this talks to the kernel.

@@ -74,12 +74,6 @@ final class TestBridge: @unchecked Sendable {
                           client: client, root: mounted.handle)
     }
 
-    /// Brings the stack up without mounting, for tests about MOUNT itself.
-    static func startUnmounted(readOnly: Bool = false, exportPath: String = "/") async throws -> TestBridge {
-        let ready = try await start(readOnly: readOnly, exportPath: exportPath)
-        return ready
-    }
-
     /// Opens another TCP connection to the bridge, tracked so it is closed at
     /// teardown rather than leaking a socket.
     func connect(credentials: AuthSysCredentials? = AuthSysCredentials(

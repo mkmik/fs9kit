@@ -246,3 +246,40 @@ struct MountOptionTests {
         #expect(harness.bridge.port == nil)
     }
 }
+
+@Suite("Resource hygiene")
+struct ResourceTests {
+    /// The lowest free descriptor, used as a portable proxy for "how many are
+    /// open". `/proc` is not available on Darwin and counting threads portably
+    /// is worse, so this is what we have.
+    private func lowestFreeDescriptor() -> Int32 {
+        let probe = dup(0)
+        guard probe >= 0 else { return -1 }
+        close(probe)
+        return probe
+    }
+
+    @Test("starting and stopping bridges does not leak descriptors")
+    func noDescriptorLeak() async throws {
+        // One warm-up cycle first: the first bridge allocates thread-local and
+        // runtime descriptors that are not a leak.
+        let warmUp = try await TestBridge.start()
+        warmUp.tearDown()
+        let before = lowestFreeDescriptor()
+
+        for _ in 0..<8 {
+            let bridge = try await TestBridge.start()
+            try bridge.fileSystem.addFile("/f", text: "x")
+            let file = try #require(try await bridge.client.lookup(bridge.root, "f").handle)
+            let contents = try await bridge.client.read(file, offset: 0, count: 8)
+            #expect(contents.data == Array("x".utf8))
+            _ = try bridge.connect()
+            bridge.tearDown()
+        }
+
+        let after = lowestFreeDescriptor()
+        // Sockets are closed asynchronously by the peer, so allow a little
+        // slack; a genuine leak would be eight or more per cycle.
+        #expect(after - before < 8, "descriptors grew from \(before) to \(after)")
+    }
+}

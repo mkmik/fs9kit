@@ -114,7 +114,7 @@ Settings pane.
 
 ```sh
 mkdir -p /Volumes/fs9kit
-sudo /sbin/mount -F -t fs9kit 9p://127.0.0.1:564/ /Volumes/fs9kit
+sudo /sbin/mount -F -t fs9kit p9://127.0.0.1:564/ /Volumes/fs9kit
 
 ls /Volumes/fs9kit
 mount | grep fs9kit
@@ -123,7 +123,7 @@ mount | grep fs9kit
 The "device" argument is a whole URL, not a path. Its form:
 
 ```
-9p://[user@]host[:port]/[aname][?option&option=value]
+p9://[user@]host[:port]/[aname][?option&option=value]
 p9://…            same thing; see the note below
 9p+unix:///path/to/socket?aname=tree
 ```
@@ -144,7 +144,7 @@ p9://…            same thing; see the note below
 Anything else in the query is an error, so a typo fails the mount instead of
 being silently ignored.
 
-> **If `9p://…` fails before the extension is reached**, use `p9://…` instead.
+> **Use `p9://`, not `9p://`.**
 > `mount(8)` turns the argument into a resource with
 > `[NSURL URLWithString:argv[0]]`, and a URL scheme may not begin with a digit
 > under RFC 3986 — a strict parser returns `nil` for `9p://host/`. Both
@@ -160,7 +160,7 @@ Read-only, on a non-default port, attaching to a named tree, as another user:
 
 ```sh
 sudo /sbin/mount -F -t fs9kit -o ro \
-     "9p://alice@files.example.com:5640/exports?msize=1M&version=9P2000.L" \
+     "p9://alice@files.example.com:5640/exports?msize=1M&version=9P2000.L" \
      /Volumes/exports
 ```
 

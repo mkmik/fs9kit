@@ -92,27 +92,27 @@ public actor NFSProgram: RPCProgram {
         var args = arguments
         switch procedure {
         case NFSConstants.procedureNull: return []
-        case NFSConstants.procedureGetAttr: return await getAttr(&args)
-        case NFSConstants.procedureSetAttr: return await setAttr(&args)
-        case NFSConstants.procedureLookup: return await lookup(&args)
-        case NFSConstants.procedureAccess: return await access(&args, context)
-        case NFSConstants.procedureReadlink: return await readlink(&args)
-        case NFSConstants.procedureRead: return await read(&args)
-        case NFSConstants.procedureWrite: return await write(&args)
-        case NFSConstants.procedureCreate: return await create(&args)
-        case NFSConstants.procedureMkdir: return await mkdir(&args)
-        case NFSConstants.procedureSymlink: return await symlink(&args)
-        case NFSConstants.procedureMknod: return await mknod(&args)
-        case NFSConstants.procedureRemove: return await remove(&args, isDirectory: false)
-        case NFSConstants.procedureRmdir: return await remove(&args, isDirectory: true)
-        case NFSConstants.procedureRename: return await rename(&args)
-        case NFSConstants.procedureLink: return await link(&args)
-        case NFSConstants.procedureReaddir: return await readdir(&args)
-        case NFSConstants.procedureReaddirPlus: return await readdirPlus(&args)
-        case NFSConstants.procedureFsstat: return await fsstat(&args)
-        case NFSConstants.procedureFsinfo: return await fsinfo(&args)
-        case NFSConstants.procedurePathconf: return await pathconf(&args)
-        case NFSConstants.procedureCommit: return await commit(&args)
+        case NFSConstants.procedureGetAttr: return try await getAttr(&args)
+        case NFSConstants.procedureSetAttr: return try await setAttr(&args)
+        case NFSConstants.procedureLookup: return try await lookup(&args)
+        case NFSConstants.procedureAccess: return try await access(&args, context)
+        case NFSConstants.procedureReadlink: return try await readlink(&args)
+        case NFSConstants.procedureRead: return try await read(&args)
+        case NFSConstants.procedureWrite: return try await write(&args)
+        case NFSConstants.procedureCreate: return try await create(&args)
+        case NFSConstants.procedureMkdir: return try await mkdir(&args)
+        case NFSConstants.procedureSymlink: return try await symlink(&args)
+        case NFSConstants.procedureMknod: return try await mknod(&args)
+        case NFSConstants.procedureRemove: return try await remove(&args, isDirectory: false)
+        case NFSConstants.procedureRmdir: return try await remove(&args, isDirectory: true)
+        case NFSConstants.procedureRename: return try await rename(&args)
+        case NFSConstants.procedureLink: return try await link(&args)
+        case NFSConstants.procedureReaddir: return try await readdir(&args)
+        case NFSConstants.procedureReaddirPlus: return try await readdirPlus(&args)
+        case NFSConstants.procedureFsstat: return try await fsstat(&args)
+        case NFSConstants.procedureFsinfo: return try await fsinfo(&args)
+        case NFSConstants.procedurePathconf: return try await pathconf(&args)
+        case NFSConstants.procedureCommit: return try await commit(&args)
         default: throw RPCProgramError.procedureUnavailable
         }
     }
@@ -133,8 +133,14 @@ public actor NFSProgram: RPCProgram {
         return handle.node
     }
 
+    /// Decodes a `filename3`.
+    ///
+    /// The XDR limit is deliberately far above NFS3_MAXNAMLEN: a name of 300
+    /// bytes is perfectly decodable and deserves NFS3ERR_NAMETOOLONG, whereas
+    /// refusing it at the codec would report it as undecodable garbage. Only a
+    /// length no sane client could have sent is treated as garbage.
     func decodeName(_ d: inout XDRDecoder) throws -> String {
-        let name = try d.string(limit: NFSConstants.maximumNameLength + 1)
+        let name = try d.string(limit: 4096)
         guard name.utf8.count <= NFSConstants.maximumNameLength else {
             throw NFSStatus.nametoolong.failure
         }
@@ -155,6 +161,13 @@ public actor NFSProgram: RPCProgram {
         return NFSFileAttributes(attributes, fsid: export.fsid)
     }
 
+    /// The optional form, for the many failure paths where the handle may not
+    /// have decoded at all.
+    func postAttributes(_ node: NodeID?) async -> NFSFileAttributes? {
+        guard let node else { return nil }
+        return await postAttributes(node)
+    }
+
     func wccBefore(_ node: NodeID) async -> NFSWccAttributes? {
         guard let attributes = try? await vfs.getAttributes(node) else { return nil }
         return NFSWccAttributes(attributes)
@@ -162,6 +175,18 @@ public actor NFSProgram: RPCProgram {
 
     func requireWritable() throws {
         if export.isReadOnly { throw NFSStatus.rofs.failure }
+    }
+
+    /// Re-raises an argument that could not be decoded as an RPC-level
+    /// GARBAGE_ARGS.
+    ///
+    /// A malformed argument is not a filesystem error: the call could not be
+    /// parsed at all, so there is no `nfsstat3` that honestly describes it, and
+    /// RFC 5531 already has a status that says exactly this. Everything else —
+    /// including a well-formed handle we simply do not recognise — stays an
+    /// NFS-level error.
+    func rethrowIfMalformed(_ error: any Error) throws {
+        if error is XDRError { throw RPCProgramError.garbageArguments }
     }
 
     /// Encodes `status` followed by a `wcc_data`, the failure shape shared by
@@ -175,7 +200,7 @@ public actor NFSProgram: RPCProgram {
 
     // MARK: - GETATTR, SETATTR
 
-    private func getAttr(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func getAttr(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var e = XDREncoder()
         do {
             let node = try decodeHandle(&d)
@@ -183,13 +208,14 @@ public actor NFSProgram: RPCProgram {
             e.uint32(NFSStatus.ok.rawValue)
             NFSFileAttributes(attributes, fsid: export.fsid).encode(into: &e)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
         }
         return e.bytes
     }
 
-    private func setAttr(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func setAttr(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -222,14 +248,15 @@ public actor NFSProgram: RPCProgram {
             let after = await postAttributes(target)
             return wccReply(.ok, NFSWccData(before: before, after: after))
         } catch {
-            let after = node == nil ? nil : await postAttributes(node!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(node)
             return wccReply(nfsStatus(for: error), NFSWccData(before: before, after: after))
         }
     }
 
     // MARK: - LOOKUP, ACCESS, READLINK
 
-    private func lookup(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func lookup(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var directory: NodeID?
         var e = XDREncoder()
         do {
@@ -242,14 +269,15 @@ public actor NFSProgram: RPCProgram {
             encodePostOpAttributes(&e, NFSFileAttributes(attributes, fsid: export.fsid))
             encodePostOpAttributes(&e, await postAttributes(parent))
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, directory == nil ? nil : await postAttributes(directory!))
+            encodePostOpAttributes(&e, await postAttributes(directory))
         }
         return e.bytes
     }
 
-    private func access(_ d: inout XDRDecoder, _ context: RPCContext) async -> [UInt8] {
+    private func access(_ d: inout XDRDecoder, _ context: RPCContext) async throws -> [UInt8] {
         var e = XDREncoder()
         do {
             let node = try decodeHandle(&d)
@@ -262,6 +290,7 @@ public actor NFSProgram: RPCProgram {
             // Only the bits the client asked about may be reported back.
             e.uint32(granted.intersection(requested).rawValue)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
             e.bool(false)
@@ -269,7 +298,7 @@ public actor NFSProgram: RPCProgram {
         return e.bytes
     }
 
-    private func readlink(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func readlink(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -282,16 +311,17 @@ public actor NFSProgram: RPCProgram {
             encodePostOpAttributes(&e, NFSFileAttributes(attributes, fsid: export.fsid))
             e.string(path)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
 
     // MARK: - READ, WRITE, COMMIT
 
-    private func read(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func read(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -318,14 +348,15 @@ public actor NFSProgram: RPCProgram {
             e.bool(eof)
             e.opaqueVariable(data)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
 
-    private func write(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func write(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -354,12 +385,13 @@ public actor NFSProgram: RPCProgram {
             e.opaqueFixed(export.boot.bytes)
             return e.bytes
         } catch {
-            let after = node == nil ? nil : await postAttributes(node!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(node)
             return wccReply(nfsStatus(for: error), NFSWccData(before: before, after: after))
         }
     }
 
-    private func commit(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func commit(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -379,7 +411,8 @@ public actor NFSProgram: RPCProgram {
             e.opaqueFixed(export.boot.bytes)
             return e.bytes
         } catch {
-            let after = node == nil ? nil : await postAttributes(node!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(node)
             return wccReply(nfsStatus(for: error), NFSWccData(before: before, after: after))
         }
     }
@@ -409,7 +442,7 @@ public actor NFSProgram: RPCProgram {
         return e.bytes
     }
 
-    private func create(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func create(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var parent: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -470,13 +503,14 @@ public actor NFSProgram: RPCProgram {
                 attributes: NFSFileAttributes(attributes, fsid: export.fsid),
                 directory: NFSWccData(before: before, after: await postAttributes(directory)))
         } catch {
-            let after = parent == nil ? nil : await postAttributes(parent!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(parent)
             return creationReply(nfsStatus(for: error), node: nil, attributes: nil,
                                  directory: NFSWccData(before: before, after: after))
         }
     }
 
-    private func mkdir(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func mkdir(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var parent: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -500,13 +534,14 @@ public actor NFSProgram: RPCProgram {
                 attributes: NFSFileAttributes(attributes, fsid: export.fsid),
                 directory: NFSWccData(before: before, after: await postAttributes(directory)))
         } catch {
-            let after = parent == nil ? nil : await postAttributes(parent!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(parent)
             return creationReply(nfsStatus(for: error), node: nil, attributes: nil,
                                  directory: NFSWccData(before: before, after: after))
         }
     }
 
-    private func symlink(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func symlink(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var parent: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -526,7 +561,8 @@ public actor NFSProgram: RPCProgram {
                 attributes: NFSFileAttributes(created.attributes, fsid: export.fsid),
                 directory: NFSWccData(before: before, after: await postAttributes(directory)))
         } catch {
-            let after = parent == nil ? nil : await postAttributes(parent!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(parent)
             return creationReply(nfsStatus(for: error), node: nil, attributes: nil,
                                  directory: NFSWccData(before: before, after: after))
         }
@@ -535,7 +571,7 @@ public actor NFSProgram: RPCProgram {
     /// MKNOD is the one procedure we decline outright: 9P has no portable way
     /// to create a device node, and nothing on a macOS mount of a remote tree
     /// needs one.
-    private func mknod(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func mknod(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var parent: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -545,7 +581,8 @@ public actor NFSProgram: RPCProgram {
             before = await wccBefore(directory)
             throw NFSStatus.notsupp.failure
         } catch {
-            let after = parent == nil ? nil : await postAttributes(parent!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(parent)
             return creationReply(nfsStatus(for: error), node: nil, attributes: nil,
                                  directory: NFSWccData(before: before, after: after))
         }
@@ -570,7 +607,7 @@ public actor NFSProgram: RPCProgram {
 
     // MARK: - Namespace changes
 
-    private func remove(_ d: inout XDRDecoder, isDirectory: Bool) async -> [UInt8] {
+    private func remove(_ d: inout XDRDecoder, isDirectory: Bool) async throws -> [UInt8] {
         var parent: NodeID?
         var before: NFSWccAttributes?
         do {
@@ -582,12 +619,13 @@ public actor NFSProgram: RPCProgram {
             try await vfs.remove(parent: directory, name: name, isDirectory: isDirectory)
             return wccReply(.ok, NFSWccData(before: before, after: await postAttributes(directory)))
         } catch {
-            let after = parent == nil ? nil : await postAttributes(parent!)
+            try rethrowIfMalformed(error)
+            let after = await postAttributes(parent)
             return wccReply(nfsStatus(for: error), NFSWccData(before: before, after: after))
         }
     }
 
-    private func rename(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func rename(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var source: NodeID?
         var destination: NodeID?
         var sourceBefore: NFSWccAttributes?
@@ -596,8 +634,8 @@ public actor NFSProgram: RPCProgram {
         func reply(_ status: NFSStatus) async -> [UInt8] {
             var e = XDREncoder()
             e.uint32(status.rawValue)
-            let sourceAfter = source == nil ? nil : await postAttributes(source!)
-            let destinationAfter = destination == nil ? nil : await postAttributes(destination!)
+            let sourceAfter = await postAttributes(source)
+            let destinationAfter = await postAttributes(destination)
             NFSWccData(before: sourceBefore, after: sourceAfter).encode(into: &e)
             NFSWccData(before: destinationBefore, after: destinationAfter).encode(into: &e)
             return e.bytes
@@ -618,11 +656,12 @@ public actor NFSProgram: RPCProgram {
                 toParent: toDirectory, toName: toName)
             return await reply(.ok)
         } catch {
+            try rethrowIfMalformed(error)
             return await reply(nfsStatus(for: error))
         }
     }
 
-    private func link(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func link(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var file: NodeID?
         var directory: NodeID?
         var before: NFSWccAttributes?
@@ -631,7 +670,7 @@ public actor NFSProgram: RPCProgram {
             var e = XDREncoder()
             e.uint32(status.rawValue)
             encodePostOpAttributes(&e, attributes)
-            let after = directory == nil ? nil : await postAttributes(directory!)
+            let after = await postAttributes(directory)
             NFSWccData(before: before, after: after).encode(into: &e)
             return e.bytes
         }
@@ -648,14 +687,15 @@ public actor NFSProgram: RPCProgram {
             let attributes = try await vfs.link(parent: parent, name: name, to: target)
             return await reply(.ok, attributes: NFSFileAttributes(attributes, fsid: export.fsid))
         } catch {
-            let attributes = file == nil ? nil : await postAttributes(file!)
+            try rethrowIfMalformed(error)
+            let attributes = await postAttributes(file)
             return await reply(nfsStatus(for: error), attributes: attributes)
         }
     }
 
     // MARK: - Volume information
 
-    private func fsstat(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func fsstat(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -686,14 +726,15 @@ public actor NFSProgram: RPCProgram {
             // tree someone else may be writing to.
             e.uint32(0)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
 
-    private func fsinfo(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func fsinfo(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -720,14 +761,15 @@ public actor NFSProgram: RPCProgram {
             if export.supportsSymlinks { properties |= NFSConstants.fsfSymlink }
             e.uint32(properties)
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
 
-    private func pathconf(_ d: inout XDRDecoder) async -> [UInt8] {
+    private func pathconf(_ d: inout XDRDecoder) async throws -> [UInt8] {
         var node: NodeID?
         var e = XDREncoder()
         do {
@@ -745,9 +787,10 @@ public actor NFSProgram: RPCProgram {
             e.bool(false)  // case_insensitive
             e.bool(true)   // case_preserving
         } catch {
+            try rethrowIfMalformed(error)
             e = XDREncoder()
             e.uint32(nfsStatus(for: error).rawValue)
-            encodePostOpAttributes(&e, node == nil ? nil : await postAttributes(node!))
+            encodePostOpAttributes(&e, await postAttributes(node))
         }
         return e.bytes
     }
