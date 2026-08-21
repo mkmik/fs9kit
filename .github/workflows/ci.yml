@@ -1,8 +1,11 @@
 name: CI
 
+# A branch with an open pull request would otherwise run everything twice, once
+# for the push and once for the pull request, and the macOS runner pool is the
+# bottleneck. Pushes are only interesting on the default branch.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -162,6 +165,9 @@ jobs:
   # the mount backends can be designed against reality rather than guesses.
   probe:
     name: Probe ${{ matrix.runner }}
+    # Findings are written up in docs/DECISIONS.md; re-run this by hand when a
+    # runner image changes rather than on every push.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     strategy:
