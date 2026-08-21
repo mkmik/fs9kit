@@ -243,7 +243,7 @@ public struct MessageCodec: Sendable {
     public func decode(frame bytes: [UInt8]) throws -> Frame {
         var r = ByteReader(bytes)
         let size = try r.u32()
-        guard Int(size) == bytes.count, size >= UInt32(NineP.headerSize) else {
+        guard Int(size) == bytes.count, size >= UInt32(P9.headerSize) else {
             throw NinePWireError.invalidFrameSize(size)
         }
         let typeByte = try r.u8()
@@ -288,7 +288,7 @@ public struct MessageCodec: Sendable {
         case .twalk:
             let fid = try r.u32(), newfid = try r.u32()
             let n = Int(try r.u16())
-            guard n <= NineP.maxWalkElements else {
+            guard n <= P9.maxWalkElements else {
                 throw NinePWireError.fieldOutOfRange("nwname=\(n)")
             }
             var names: [String] = []
@@ -297,7 +297,7 @@ public struct MessageCodec: Sendable {
             return .twalk(fid: fid, newfid: newfid, names: names)
         case .rwalk:
             let n = Int(try r.u16())
-            guard n <= NineP.maxWalkElements else {
+            guard n <= P9.maxWalkElements else {
                 throw NinePWireError.fieldOutOfRange("nwqid=\(n)")
             }
             var qids: [Qid] = []

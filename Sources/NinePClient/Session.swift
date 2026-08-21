@@ -21,15 +21,22 @@ public struct NinePServerError: Error, CustomStringConvertible, Equatable {
     public static func fromLegacy(_ message: String) -> NinePServerError {
         let lower = message.lowercased()
         let table: [(String, Int32)] = [
+            // Phrasings seen in the wild: Plan 9 and u9fs say "does not
+            // exist", go9p says "No such path", Linux-flavoured servers say
+            // "no such file or directory".
             ("does not exist", ENOENT), ("no such file", ENOENT),
+            ("no such path", ENOENT), ("not exist", ENOENT),
             ("not found", ENOENT), ("directory entry not found", ENOENT),
+            ("unknown file", ENOENT),
             ("permission denied", EACCES), ("access denied", EACCES),
-            ("not a directory", ENOTDIR),
+            ("not a directory", ENOTDIR), ("walk in non-directory", ENOTDIR),
             ("is a directory", EISDIR),
             ("already exists", EEXIST), ("file exists", EEXIST),
+            ("create/wstat -- file exists", EEXIST),
             ("directory not empty", ENOTEMPTY),
             ("not implemented", ENOSYS), ("unknown message", ENOSYS),
             ("read only", EROFS), ("read-only", EROFS),
+            ("permission", EACCES),
             ("file too large", EFBIG),
             ("no space", ENOSPC),
             ("cross-device", EXDEV), ("different file systems", EXDEV),
@@ -58,10 +65,10 @@ public struct NinePSessionOptions: Sendable {
     public var clientID: String
 
     public init(
-        msize: UInt32 = NineP.defaultMsize,
+        msize: UInt32 = P9.defaultMsize,
         versions: [NinePVersion] = [.v9P2000L, .v9P2000u, .v9P2000],
         connectTimeout: TimeInterval = 30,
-        handshakeTimeout: TimeInterval = 15,
+        handshakeTimeout: TimeInterval = 5,
         clientID: String = "fs9kit"
     ) {
         self.msize = msize
@@ -83,7 +90,7 @@ public final class NinePSession: @unchecked Sendable {
     /// The negotiated maximum frame size, in bytes.
     public let msize: UInt32
     /// The largest payload that fits in one Rread/Twrite at this msize.
-    public var maxDataSize: Int { Int(msize) - NineP.headerSize - 4 - 8 - 4 }
+    public var maxDataSize: Int { Int(msize) - P9.headerSize - 4 - 8 - 4 }
     public let options: NinePSessionOptions
 
     private let socket: StreamSocket
@@ -121,28 +128,51 @@ public final class NinePSession: @unchecked Sendable {
         to endpoint: NinePEndpoint,
         options: NinePSessionOptions = NinePSessionOptions()
     ) async throws -> NinePSession {
-        let socket = try await blocking {
-            try StreamSocket.connect(to: endpoint, timeout: options.connectTimeout)
-        }
-        do {
-            let (version, msize) = try await blocking {
-                try negotiate(socket: socket, options: options)
+        // Not every server answers an offer it does not understand. `u9fs`
+        // downgrades correctly and `p9ufs` replies "unknown", but `export9p`
+        // says nothing at all — so an offer that goes unanswered means
+        // abandoning that connection and dialing again with a lower one,
+        // rather than declaring the server unreachable.
+        var offers = options.versions
+        var lastError: (any Error)?
+
+        while !offers.isEmpty {
+            let socket = try await blocking {
+                try StreamSocket.connect(to: endpoint, timeout: options.connectTimeout)
             }
-            let session = NinePSession(socket: socket, version: version,
-                                       msize: msize, options: options)
-            session.startReader()
-            return session
-        } catch {
-            socket.close()
-            throw error
+            do {
+                let offering = offers
+                let (version, msize) = try await blocking {
+                    try negotiate(socket: socket, offering: offering, options: options)
+                }
+                let session = NinePSession(socket: socket, version: version,
+                                           msize: msize, options: options)
+                session.startReader()
+                return session
+            } catch let error as NinePClientError {
+                socket.close()
+                guard case .timedOut = error else { throw error }
+                lastError = error
+                offers.removeFirst()
+                // An inherited file descriptor cannot be redialled.
+                if case .fileDescriptor = endpoint { break }
+            } catch {
+                socket.close()
+                throw error
+            }
         }
+        throw lastError ?? NinePClientError.versionNegotiationFailed(
+            offered: options.versions.map(\.rawValue), serverSaid: "no reply")
     }
 
-    /// Offers each version in turn until the server accepts one. A server that
-    /// does not know a version replies "unknown"; Tversion may then be sent
-    /// again on the same connection with a lower offer.
+    /// Offers each version in turn until the server accepts one.
+    ///
+    /// A server that does not know a version replies "unknown"; Tversion may
+    /// then be sent again on the same connection with a lower offer. A server
+    /// that replies nothing at all trips the handshake timeout, which the
+    /// caller turns into a fresh connection with a shorter list.
     private static func negotiate(
-        socket: StreamSocket, options: NinePSessionOptions
+        socket: StreamSocket, offering: [NinePVersion], options: NinePSessionOptions
     ) throws -> (NinePVersion, UInt32) {
         // Any dialect encodes Tversion/Rversion identically, so the codec used
         // here does not matter.
@@ -152,8 +182,9 @@ public final class NinePSession: @unchecked Sendable {
         socket.setReadTimeout(options.handshakeTimeout)
         // Restore blocking reads: the reader thread must wait indefinitely.
         defer { socket.setReadTimeout(0) }
-        for candidate in options.versions {
-            let frame = Frame(tag: NineP.notag,
+
+        for candidate in offering {
+            let frame = Frame(tag: P9.notag,
                               message: .tversion(msize: msize, version: candidate.rawValue))
             try socket.writeFully(codec.encode(frame))
             let reply = try readFrame(socket: socket, limit: msize, codec: codec)
@@ -164,21 +195,21 @@ public final class NinePSession: @unchecked Sendable {
             lastReply = serverVersion
             // A server may only shrink msize, never grow it.
             msize = min(msize, serverMsize)
-            guard msize > UInt32(NineP.headerSize) + 64 else {
-                throw NinePClientError.protocolViolation("server proposed an unusable msize \(serverMsize)")
+            guard msize > UInt32(P9.headerSize) + 64 else {
+                throw NinePClientError.protocolViolation(
+                    "server proposed an unusable msize \(serverMsize)")
             }
-            // Servers may answer with a prefix, e.g. "9P2000" for a ".u" offer.
             if let agreed = NinePVersion(rawValue: serverVersion),
                options.versions.contains(agreed) {
                 return (agreed, msize)
             }
             if serverVersion != "unknown" && !serverVersion.hasPrefix("9P") {
                 throw NinePClientError.versionNegotiationFailed(
-                    offered: options.versions.map(\.rawValue), serverSaid: serverVersion)
+                    offered: offering.map(\.rawValue), serverSaid: serverVersion)
             }
         }
         throw NinePClientError.versionNegotiationFailed(
-            offered: options.versions.map(\.rawValue), serverSaid: lastReply)
+            offered: offering.map(\.rawValue), serverSaid: lastReply)
     }
 
     /// Reads one size-prefixed frame.
@@ -187,7 +218,7 @@ public final class NinePSession: @unchecked Sendable {
         let sizeBytes = try socket.readFully(4)
         let size = UInt32(sizeBytes[0]) | UInt32(sizeBytes[1]) << 8
             | UInt32(sizeBytes[2]) << 16 | UInt32(sizeBytes[3]) << 24
-        guard size >= UInt32(NineP.headerSize) else {
+        guard size >= UInt32(P9.headerSize) else {
             throw NinePWireError.invalidFrameSize(size)
         }
         guard size <= limit else {
@@ -271,7 +302,7 @@ public final class NinePSession: @unchecked Sendable {
         defer { lock.unlock() }
         if let f = failure { throw f }
         if let t = freeTags.popLast() { return t }
-        guard nextTag < NineP.notag else {
+        guard nextTag < P9.notag else {
             throw NinePClientError.protocolViolation("all 65535 tags are in use")
         }
         let t = nextTag

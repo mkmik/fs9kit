@@ -15,7 +15,7 @@ final class FidPool: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if let f = free.popLast() { return f }
-        guard next < NineP.nofid else {
+        guard next < P9.nofid else {
             throw NinePClientError.protocolViolation("out of fids")
         }
         let f = next
@@ -24,7 +24,7 @@ final class FidPool: @unchecked Sendable {
     }
 
     func release(_ fid: Fid) {
-        guard fid != NineP.nofid else { return }
+        guard fid != P9.nofid else { return }
         lock.lock()
         free.append(fid)
         lock.unlock()

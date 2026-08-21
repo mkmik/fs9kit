@@ -221,12 +221,25 @@ struct RPCTests {
         }
     }
 
-    @Test("plain 9P2000 error strings are mapped to plausible errnos")
-    func legacyErrorMapping() {
-        #expect(NinePServerError.fromLegacy("file does not exist").errno == ENOENT)
-        #expect(NinePServerError.fromLegacy("permission denied").errno == EACCES)
-        #expect(NinePServerError.fromLegacy("directory not empty").errno == ENOTEMPTY)
-        #expect(NinePServerError.fromLegacy("something odd").errno == EIO)
+    /// Base 9P2000 has no numeric errors, so the only way to give a caller a
+    /// usable errno is to recognise the strings servers actually send. The
+    /// phrasings here were collected from real servers, not invented.
+    @Test("plain 9P2000 error strings are mapped to plausible errnos",
+          arguments: [
+            ("file does not exist", ENOENT),
+            ("No such path", ENOENT),                    // knusbaum/go9p
+            ("no such file or directory", ENOENT),
+            ("directory entry not found", ENOENT),
+            ("permission denied", EACCES),
+            ("not a directory", ENOTDIR),
+            ("directory not empty", ENOTEMPTY),
+            ("create/wstat -- file exists", EEXIST),     // u9fs
+            ("file system read only", EROFS),
+            ("something nobody has ever said", EIO),
+          ])
+    func legacyErrorMapping(message: String, expected: Int32) {
+        #expect(NinePServerError.fromLegacy(message).errno == expected,
+                "\(message) mapped to \(NinePServerError.fromLegacy(message).errno)")
     }
 
     @Test("a reply of the wrong type is a protocol violation, not a crash")

@@ -101,6 +101,16 @@ public actor NineVFS {
         var openFid: Fid?
         var openFlags: OpenFlags = []
         var openedAt: Double = 0
+        /// How many reads or writes are currently using `openFid`.
+        ///
+        /// The actor yields at every `await`, so a second caller can arrive
+        /// while the first is mid-read. Without this count, re-opening the
+        /// file for a wider access mode would clunk a fid the first caller is
+        /// still reading from — which a real server answers with "Bad Fid".
+        var inFlight = 0
+        /// Fids replaced while still in use, clunked once `inFlight` reaches
+        /// zero.
+        var retiredFids: [Fid] = []
         var attributes: FileAttributes?
         var attributesExpireAt: Double = 0
         /// Name -> child node, populated by lookups and directory reads.
@@ -268,6 +278,10 @@ public actor NineVFS {
             return (up, try await getAttributes(up))
         }
         let parentNode = try node(parent)
+        // Servers disagree about what walking through a non-directory returns:
+        // p9ufs says EINVAL, others ENOTDIR or ENOENT. Answer it here so both
+        // mount backends see one consistent errno, and save a round trip.
+        guard parentNode.qid.kind.contains(.dir) else { throw FSError.notDirectory }
         let parentFid = try await fid(for: parentNode)
         do {
             let (fid, qids) = try await client.walk(from: parentFid, to: [name])
@@ -334,22 +348,80 @@ public actor NineVFS {
     ) async throws -> FileAttributes {
         try checkWritable()
         let n = try node(id)
+        let atime = accessTime.map { (sec: $0.seconds, nsec: UInt64($0.nanoseconds)) }
+        let mtime = modifyTime.map { (sec: $0.seconds, nsec: UInt64($0.nanoseconds)) }
         do {
             // Truncation has to go through a fid the server considers open for
             // writing on some implementations, but setattr-on-a-walked-fid is
             // what the protocol specifies, so use the plain path fid.
             let fid = try await fid(for: n)
-            try await client.setattr(
-                fid,
-                mode: permissions.map { UInt32($0) },
-                uid: uid, gid: gid, size: size,
-                atime: accessTime.map { (sec: $0.seconds, nsec: UInt64($0.nanoseconds)) },
-                mtime: modifyTime.map { (sec: $0.seconds, nsec: UInt64($0.nanoseconds)) })
+            do {
+                try await client.setattr(
+                    fid, mode: permissions.map { UInt32($0) },
+                    uid: uid, gid: gid, size: size, atime: atime, mtime: mtime)
+            } catch let error where Self.isUnsupported(error) {
+                // Some servers implement only part of setattr and reject the
+                // whole request if any field is unsupported — p9ufs takes size
+                // but not mode or times. Retrying one field at a time applies
+                // what the server can do instead of failing a truncate because
+                // a chmod came along for the ride.
+                try await applyIndividually(
+                    fid: fid, permissions: permissions, uid: uid, gid: gid,
+                    size: size, atime: atime, mtime: mtime)
+            }
             n.attributesExpireAt = 0
             return try await fetchAttributes(n)
         } catch {
             throw FSError.from(error)
         }
+    }
+
+    private static func isUnsupported(_ error: any Error) -> Bool {
+        let e = FSError.from(error)
+        return e.errno == ENOSYS || e.errno == ENOTSUP || e.errno == EOPNOTSUPP
+    }
+
+    /// Applies each requested attribute in its own request, succeeding if any
+    /// of them took. Throws the first failure only when nothing could be
+    /// applied at all.
+    ///
+    /// Size goes first: a truncate is the change a caller is least willing to
+    /// have silently skipped.
+    private func applyIndividually(
+        fid: Fid, permissions: UInt16?, uid: UInt32?, gid: UInt32?, size: UInt64?,
+        atime: (sec: UInt64, nsec: UInt64)?, mtime: (sec: UInt64, nsec: UInt64)?
+    ) async throws {
+        var attempted = 0
+        var applied = 0
+        var firstFailure: (any Error)?
+
+        if let size {
+            attempted += 1
+            do { try await client.setattr(fid, size: size); applied += 1 }
+            catch { firstFailure = firstFailure ?? error }
+        }
+        if let permissions {
+            attempted += 1
+            do { try await client.setattr(fid, mode: UInt32(permissions)); applied += 1 }
+            catch { firstFailure = firstFailure ?? error }
+        }
+        if uid != nil || gid != nil {
+            attempted += 1
+            do { try await client.setattr(fid, uid: uid, gid: gid); applied += 1 }
+            catch { firstFailure = firstFailure ?? error }
+        }
+        if let atime {
+            attempted += 1
+            do { try await client.setattr(fid, atime: atime); applied += 1 }
+            catch { firstFailure = firstFailure ?? error }
+        }
+        if let mtime {
+            attempted += 1
+            do { try await client.setattr(fid, mtime: mtime); applied += 1 }
+            catch { firstFailure = firstFailure ?? error }
+        }
+
+        if attempted > 0, applied == 0, let failure = firstFailure { throw failure }
     }
 
     private func checkWritable() throws {
@@ -358,11 +430,16 @@ public actor NineVFS {
 
     // MARK: - Open fids
 
-    /// Returns a fid open for at least `flags`, opening or re-opening as needed.
-    private func openFid(for n: Node, flags: OpenFlags) async throws -> Fid {
+    /// Returns a fid open for at least `flags` and marks it in use.
+    ///
+    /// Every caller must pair this with ``release(_:)``. The lease exists
+    /// because the actor yields at each `await`: without it, one task could
+    /// replace and clunk the fid another task is in the middle of reading.
+    private func acquireOpenFid(for n: Node, flags: OpenFlags) async throws -> Fid {
         let wanted = flags.intersection([.read, .write])
         if let existing = n.openFid, n.openFlags.isSuperset(of: wanted) {
             n.openedAt = now()
+            n.inFlight += 1
             return existing
         }
         // Re-open with the union of what is already open and what is wanted, so
@@ -378,19 +455,54 @@ public actor NineVFS {
             // should report the server's error, not a generic one.
             throw FSError.from(error)
         }
-        if let old = n.openFid { await client.clunk(old) }
+        // From here to the return there is no suspension, so the lease cannot
+        // be lost to an interleaving caller.
+        if let old = n.openFid, old != scratch { retire(old, on: n) }
         n.openFid = scratch
         n.openFlags = combined
         n.openedAt = now()
+        n.inFlight += 1
         return scratch
     }
 
+    /// Ends a lease taken by ``acquireOpenFid(for:flags:)``.
+    private func release(_ n: Node) {
+        n.inFlight -= 1
+        guard n.inFlight <= 0 else { return }
+        n.inFlight = 0
+        reapRetired(n)
+    }
+
+    private func retire(_ fid: Fid, on n: Node) {
+        if n.inFlight > 0 {
+            n.retiredFids.append(fid)
+        } else {
+            Task { [client] in await client.clunk(fid) }
+        }
+    }
+
+    private func reapRetired(_ n: Node) {
+        guard !n.retiredFids.isEmpty else { return }
+        let doomed = n.retiredFids
+        n.retiredFids = []
+        Task { [client] in
+            for f in doomed { await client.clunk(f) }
+        }
+    }
+
     /// Closes a node's open fid, if any. Backends call this on last close.
+    ///
+    /// A fid still being read is retired rather than clunked, so a close
+    /// racing a read cannot pull the fid out from under it.
     public func closeHandle(_ id: NodeID) async {
         guard let n = nodes[id], let f = n.openFid else { return }
         n.openFid = nil
         n.openFlags = []
-        await client.clunk(f)
+        if n.inFlight > 0 {
+            n.retiredFids.append(f)
+        } else {
+            await client.clunk(f)
+        }
     }
 
     // MARK: - I/O
@@ -399,7 +511,8 @@ public actor NineVFS {
         let n = try node(id)
         guard n.qid.kind.contains(.dir) == false else { throw FSError.isDirectory }
         do {
-            let fid = try await openFid(for: n, flags: .read)
+            let fid = try await acquireOpenFid(for: n, flags: .read)
+            defer { release(n) }
             return try await client.readFully(fid, offset: offset, count: count)
         } catch {
             throw FSError.from(error)
@@ -411,7 +524,8 @@ public actor NineVFS {
         try checkWritable()
         let n = try node(id)
         do {
-            let fid = try await openFid(for: n, flags: .write)
+            let fid = try await acquireOpenFid(for: n, flags: .write)
+            defer { release(n) }
             try await client.writeFully(fid, offset: offset, data: data)
             if sync { try await client.fsync(fid) }
             // The size and mtime we have cached are now wrong.
@@ -439,7 +553,8 @@ public actor NineVFS {
         let n = try node(id)
         guard n.qid.kind.contains(.dir) else { throw FSError.notDirectory }
         do {
-            let fid = try await openFid(for: n, flags: [.read, .directory])
+            let fid = try await acquireOpenFid(for: n, flags: [.read, .directory])
+            defer { release(n) }
             let want = UInt32(min(maxBytes ?? client.ioSize, client.ioSize))
             let raw = try await client.readdir(fid, offset: cookie, count: want)
             var entries: [DirectoryEntry] = []
@@ -620,8 +735,18 @@ public actor NineVFS {
     public func statfs() async throws -> FilesystemStats {
         do {
             return FilesystemStats(try await client.statfs())
-        } catch {
-            throw FSError.from(error)
+        } catch let error {
+            // Plenty of servers do not implement Tstatfs — p9ufs is one — and a
+            // volume whose `df` fails is a broken volume as far as the kernel is
+            // concerned. Report a large, plausible filesystem instead: callers
+            // learn nothing false about free space that they would not have
+            // learned from an outright failure.
+            let e = FSError.from(error)
+            guard e.errno == ENOSYS || e.errno == ENOTSUP || e.errno == EOPNOTSUPP else { throw e }
+            return FilesystemStats(
+                blockSize: 4096,
+                totalBlocks: 1 << 32, freeBlocks: 1 << 31, availableBlocks: 1 << 31,
+                totalFiles: 1 << 20, freeFiles: 1 << 19, maximumNameLength: 255)
         }
     }
 

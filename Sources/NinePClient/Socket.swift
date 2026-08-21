@@ -39,7 +39,7 @@ public enum NinePEndpoint: Sendable, Hashable, CustomStringConvertible {
 
     /// Parses the Plan 9 dial string forms plus a few conveniences:
     /// `tcp!host!port`, `unix!/path`, `host:port`, `host`, `/path/to/socket`.
-    public static func parse(_ s: String, defaultPort: Int = NineP.defaultPort) throws -> NinePEndpoint {
+    public static func parse(_ s: String, defaultPort: Int = P9.defaultPort) throws -> NinePEndpoint {
         if s.hasPrefix("/") || s.hasPrefix("./") { return .unix(path: s) }
         let parts = s.split(separator: "!", omittingEmptySubsequences: false).map(String.init)
         if parts.count >= 2 {
@@ -112,7 +112,14 @@ public final class StreamSocket: @unchecked Sendable {
     private let fd: Int32
     private let closed = ManagedAtomicFlag()
 
-    private init(fd: Int32) { self.fd = fd }
+    private init(fd: Int32) {
+        self.fd = fd
+        #if canImport(Darwin)
+        // Darwin has no MSG_NOSIGNAL; the suppression is a socket option.
+        var on: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        #endif
+    }
 
     public static func connect(to endpoint: NinePEndpoint, timeout: TimeInterval = 30) throws -> StreamSocket {
         switch endpoint {
@@ -264,11 +271,23 @@ public final class StreamSocket: @unchecked Sendable {
     }
 
     /// Writes every byte, or throws.
+    ///
+    /// Writing to a socket the peer has closed raises SIGPIPE, whose default
+    /// action is to kill the process. A 9P server going away must produce an
+    /// error, not take down the mount helper or the filesystem extension with
+    /// it, so the write is suppressed at the socket (Darwin) or at the call
+    /// (Linux) rather than by installing a process-wide signal handler, which
+    /// a library has no business doing to its host.
     public func writeFully(_ bytes: [UInt8]) throws {
         var sent = 0
         try bytes.withUnsafeBytes { raw in
             while sent < bytes.count {
-                let n = sysWrite(fd, raw.baseAddress!.advanced(by: sent), bytes.count - sent)
+                #if canImport(Darwin)
+                let n = Darwin.send(fd, raw.baseAddress!.advanced(by: sent), bytes.count - sent, 0)
+                #else
+                let n = Glibc.send(fd, raw.baseAddress!.advanced(by: sent), bytes.count - sent,
+                                   Int32(MSG_NOSIGNAL))
+                #endif
                 if n > 0 { sent += n; continue }
                 if errno == EINTR { continue }
                 if errno == EPIPE { throw NinePClientError.connectionClosed }

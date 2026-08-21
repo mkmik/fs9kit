@@ -5,7 +5,7 @@ public typealias Tag = UInt16
 /// A 9P file identifier. `nofid` means "no fid supplied".
 public typealias Fid = UInt32
 
-public enum NineP {
+public enum P9 {
     /// The tag Tversion must use.
     public static let notag: Tag = 0xFFFF
     /// The fid value meaning "none", used by Tattach when there is no auth fid.

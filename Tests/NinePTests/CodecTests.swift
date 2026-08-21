@@ -101,7 +101,7 @@ struct GoldenTests {
     @Test("Tversion")
     func tversion() throws {
         let codec = MessageCodec(version: .v9P2000L)
-        let frame = Frame(tag: NineP.notag,
+        let frame = Frame(tag: P9.notag,
                           message: .tversion(msize: 8192, version: "9P2000.L"))
         let bytes = codec.encode(frame)
         #expect(hex(bytes) == "15000000" + "64" + "ffff" + "00200000" + "0800" + "39503230:30302e4c".replacingOccurrences(of: ":", with: ""))
@@ -111,7 +111,7 @@ struct GoldenTests {
     /// A Tattach in base 9P2000 has no n_uname; the same message in .L does.
     @Test("Tattach differs between dialects")
     func tattachDialects() throws {
-        let msg = Message.tattach(fid: 0, afid: NineP.nofid, uname: "glenda",
+        let msg = Message.tattach(fid: 0, afid: P9.nofid, uname: "glenda",
                                   aname: "", numericUID: 1000)
         let plain = MessageCodec(version: .v9P2000)
         let linux = MessageCodec(version: .v9P2000L)
@@ -185,11 +185,11 @@ struct StatTests {
     func doubleSize() throws {
         let codec = MessageCodec(version: .v9P2000)
         let bytes = codec.encode(Frame(tag: 3, message: .rstat(stat: Self.sample)))
-        var r = ByteReader(Array(bytes.dropFirst(NineP.headerSize)))
+        var r = ByteReader(Array(bytes.dropFirst(P9.headerSize)))
         let outer = Int(try r.u16())
         let inner = Int(try r.u16())
         #expect(outer == inner + 2)
-        #expect(outer == bytes.count - NineP.headerSize - 2)
+        #expect(outer == bytes.count - P9.headerSize - 2)
         #expect(try codec.decode(frame: bytes).message == .rstat(stat: Self.sample))
     }
 
@@ -259,7 +259,7 @@ struct RoundTripTests {
             .rversion(msize: 65536, version: "9P2000.L"),
             .tauth(afid: 1, uname: "u", aname: "a", numericUID: numericUID),
             .rauth(aqid: qid),
-            .tattach(fid: 0, afid: NineP.nofid, uname: "u", aname: "", numericUID: numericUID),
+            .tattach(fid: 0, afid: P9.nofid, uname: "u", aname: "", numericUID: numericUID),
             .rattach(qid: qid),
             .rerror(message: "no such file", errno: ext == nil ? nil : 2),
             .rlerror(errno: 2),
@@ -427,8 +427,8 @@ struct ConstantTests {
 
     @Test("reserved values")
     func reserved() {
-        #expect(NineP.notag == 0xFFFF)
-        #expect(NineP.nofid == 0xFFFF_FFFF)
-        #expect(NineP.defaultPort == 564)
+        #expect(P9.notag == 0xFFFF)
+        #expect(P9.nofid == 0xFFFF_FFFF)
+        #expect(P9.defaultPort == 564)
     }
 }

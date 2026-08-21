@@ -77,7 +77,7 @@ public final class NinePClient: @unchecked Sendable {
         do {
             let rootFid: Fid = 0
             let qid = try await session.rpc(
-                .tattach(fid: rootFid, afid: NineP.nofid,
+                .tattach(fid: rootFid, afid: P9.nofid,
                          uname: credentials.uname, aname: credentials.aname,
                          numericUID: credentials.numericUID ?? UInt32.max)
             ) { if case let .rattach(q) = $0 { q } else { nil } }
@@ -103,7 +103,7 @@ public final class NinePClient: @unchecked Sendable {
     /// Clunking cannot meaningfully fail — the server forgets the fid either
     /// way — so errors are swallowed rather than propagated into cleanup paths.
     public func clunk(_ fid: Fid) async {
-        guard fid != rootFid, fid != NineP.nofid else { return }
+        guard fid != rootFid, fid != P9.nofid else { return }
         _ = try? await session.rpc(.tclunk(fid: fid))
         fids.release(fid)
     }
@@ -126,7 +126,7 @@ public final class NinePClient: @unchecked Sendable {
             var source = from
             var remaining = names[...]
             repeat {
-                let chunk = Array(remaining.prefix(NineP.maxWalkElements))
+                let chunk = Array(remaining.prefix(P9.maxWalkElements))
                 remaining = remaining.dropFirst(chunk.count)
                 let got = try await session.rpc(
                     .twalk(fid: source, newfid: newFid, names: chunk)
