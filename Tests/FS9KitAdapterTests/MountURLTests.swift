@@ -340,3 +340,28 @@ struct SchemeViabilityTests {
         }
     }
 }
+
+@Suite("Backend availability")
+struct BackendAvailabilityTests {
+    /// Records, rather than demands, whether the FSKit glue is in this build.
+    /// A build with the backend compiled out looks identical to one that has
+    /// it until the extension fails to load, so the CI log should say.
+    @Test("the build states whether the FSKit backend is present")
+    func reportsAvailability() {
+        if FSKitBackend.isCompiledIn {
+            print("FSKit backend: compiled in")
+            #expect(FSKitBackend.absenceReason == nil)
+        } else {
+            let reason = FSKitBackend.absenceReason ?? "unknown"
+            print("FSKit backend: absent — \(reason)")
+            #expect(!reason.isEmpty)
+        }
+    }
+
+    #if canImport(FSKit) && compiler(>=6.2)
+    @Test("where FSKit is available, the backend must actually be present")
+    func presentWhereItShouldBe() {
+        #expect(FSKitBackend.isCompiledIn)
+    }
+    #endif
+}

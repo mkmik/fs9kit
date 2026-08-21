@@ -1,14 +1,18 @@
-// Compiled only when FS9KIT_FSKIT is defined, which the Xcode project sets and
-// SwiftPM does not.
+// Compiled only where the macOS 26 SDK is in play.
 //
-// `canImport(FSKit)` is not a strong enough gate: the framework exists in the
-// macOS 15.4 SDK too, but there it has no FSGenericURLResource — the class that
-// makes it possible to mount something with no block device behind it — and its
-// protocol reply handlers are not Sendable. Compiling this against that SDK
-// fails on both counts. The whole backend needs macOS 26 or later, so it is
-// gated on a flag the macOS 26 build turns on rather than on the framework
-// merely being present.
-#if FS9KIT_FSKIT && canImport(FSKit)
+// `canImport(FSKit)` alone is not a strong enough gate: the framework exists in
+// the macOS 15.4 SDK too, but there it has no FSGenericURLResource — the class
+// that makes it possible to mount something with no block device behind it —
+// and its protocol reply handlers differ. Compiling this against that SDK fails
+// on both counts.
+//
+// There is no `#if` that asks the SDK's version directly, so the compiler
+// version stands in for it: the macOS 26 SDK ships with Xcode 26, whose Swift
+// is 6.2 or later, while the 15.4 SDK ships with Xcode 16.4 and Swift 6.1. A
+// deliberately mismatched pairing — a standalone 6.2 toolchain aimed at the
+// 15.4 SDK — would defeat this, but that combination cannot build the backend
+// anyway.
+#if canImport(FSKit) && compiler(>=6.2)
 import Foundation
 // FSKit's protocol reply handlers are not `@Sendable`, so a witness that
 // declares them `@Sendable` does not satisfy the requirement — which then makes
