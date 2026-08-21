@@ -26,7 +26,9 @@ fs9p="$repo_root/.build/release/fs9p"
 port="${FS9P_TEST_PORT:-5673}"
 # The whole exercise phase gets a deadline of its own, comfortably inside the
 # workflow's, so the diagnostics below always get a chance to print.
-overall_deadline="${FS9P_E2E_DEADLINE:-600}"
+# The serial phase takes well under a minute, so a generous multiple of that
+# still surfaces a wedge quickly rather than at the workflow's limit.
+overall_deadline="${FS9P_E2E_DEADLINE:-300}"
 
 fixture=""
 mountpoint=""
@@ -153,6 +155,14 @@ printf 'deep content\n'       > "$fixture/dir/nested/deep.txt"
 head -c 4194304 /dev/urandom  > "$fixture/big.bin"
 for i in $(seq 1 200); do : > "$fixture/dir/entry-$i"; done
 big_sum="$(shasum -a 256 "$fixture/big.bin" | cut -d' ' -f1)"
+# One file per concurrent reader, laid down before the mount exists so that no
+# cached lookup decides whether they are visible. Eight readers of the *same*
+# file would prove nothing: the client serves all but the first from its own
+# cache — the first run of that section issued no NFS READs at all — so the
+# requests never overlap at the bridge, which is the thing under test.
+for i in 1 2 3 4 5 6 7 8; do
+    cp "$fixture/big.bin" "$fixture/concurrent-$i.bin"
+done
 dir_count="$(ls -1 "$fixture/dir" | wc -l | tr -d ' ')"
 
 # ---------------------------------------------------------------- serve
@@ -290,10 +300,17 @@ check_equal "truncate empties the file" "0" "$(stat -f%z "$fixture/new.txt")"
 
 log "Concurrency"
 step "eight concurrent 4 MiB checksums"
+readers=()
 for i in 1 2 3 4 5 6 7 8; do
-    ( run 120 shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1 > "$fixture/sum.$i" ) &
+    ( run 120 shasum -a 256 "$mountpoint/concurrent-$i.bin" | cut -d' ' -f1 \
+        > "$fixture/sum.$i" ) &
+    readers+=("$!")
 done
-wait
+# Named explicitly, never bare: a bare `wait` also waits for the deadline
+# watchdog above, which is a background job of this same shell and sleeps for
+# the whole deadline. That turned a section which had already finished into a
+# job that sat until the watchdog fired.
+for pid in "${readers[@]}"; do wait "$pid" || true; done
 concurrent_ok=yes
 for i in 1 2 3 4 5 6 7 8; do
     [[ "$(cat "$fixture/sum.$i")" == "$big_sum" ]] || concurrent_ok=no
