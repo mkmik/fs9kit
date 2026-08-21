@@ -116,9 +116,18 @@ dump_logs() {
     fi
 }
 
+# Killing the watchdog subshell does not kill the `sleep` it is blocked in —
+# that is a child of its own, and it outlives the script as an orphan.
+stop_watchdog() {
+    [[ -n "$watchdog_pid" ]] || return 0
+    pkill -P "$watchdog_pid" 2>/dev/null
+    kill "$watchdog_pid" 2>/dev/null
+    watchdog_pid=""
+}
+
 cleanup() {
     set +e
-    [[ -n "$watchdog_pid" ]] && kill "$watchdog_pid" 2>/dev/null
+    stop_watchdog
     if [[ -n "$mountpoint" ]] && mount | grep -q " $mountpoint "; then
         run 30 sudo umount -f "$mountpoint"
     fi
@@ -320,8 +329,7 @@ check_equal "eight concurrent readers all agree" "yes" "$concurrent_ok"
 # ---------------------------------------------------------------- unmount
 
 log "Unmounting"
-kill "$watchdog_pid" 2>/dev/null || true
-watchdog_pid=""
+stop_watchdog
 check "umount" "$fs9p" umount "$mountpoint"
 sleep 0.5
 if mount | grep -q " $mountpoint "; then fail "still mounted"; else ok "unmounted cleanly"; fi
