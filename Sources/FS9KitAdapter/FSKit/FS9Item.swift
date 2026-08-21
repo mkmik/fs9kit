@@ -10,7 +10,14 @@
 // merely being present.
 #if FS9KIT_FSKIT && canImport(FSKit)
 import Foundation
-import FSKit
+// FSKit's protocol reply handlers are not `@Sendable`, so a witness that
+// declares them `@Sendable` does not satisfy the requirement — which then makes
+// the whole type fail to conform, and the extension entry point fail its
+// associated-type constraint. The handlers are therefore spelled exactly as the
+// framework spells them, and the import is `@preconcurrency` so that capturing
+// one in a Task is a warning about Apple's annotations rather than an error in
+// ours.
+@preconcurrency import FSKit
 import FS9Core
 
 /// One file in a mounted 9P tree, as FSKit sees it.

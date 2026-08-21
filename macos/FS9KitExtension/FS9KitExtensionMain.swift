@@ -1,4 +1,4 @@
-import FSKit
+@preconcurrency import FSKit
 import FS9KitAdapter
 
 /// The extension's entry point.

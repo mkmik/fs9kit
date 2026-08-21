@@ -131,16 +131,35 @@ struct InteropTests {
 
     // MARK: - Reading
 
-    @Test("the root listing matches what is really on disk")
+    /// Listed against a directory this test owns, not the export root: the
+    /// suite runs its cases in parallel and they create and delete files at the
+    /// root, so a listing taken there and compared against a `contentsOfDirectory`
+    /// taken a moment later disagrees for reasons that have nothing to do with
+    /// the server.
+    @Test("a directory listing matches what is really on disk, exactly")
+    func directoryListing() async throws {
+        try await withScratch { vfs, scratch, onDisk in
+            try Data("a".utf8).write(to: onDisk.appendingPathComponent("a.txt"))
+            try Data(repeating: 0, count: 4096)
+                .write(to: onDisk.appendingPathComponent("b.bin"))
+            try FileManager.default.createDirectory(
+                at: onDisk.appendingPathComponent("sub"), withIntermediateDirectories: false)
+
+            let entries = try await vfs.readDirectoryAll(scratch)
+            #expect(Set(entries.map(\.name)) == ["a.txt", "b.bin", "sub"])
+            #expect(entries.first { $0.name == "sub" }?.type == .directory)
+            #expect(entries.first { $0.name == "a.txt" }?.type == .regular)
+        }
+    }
+
+    @Test("the fixture the harness laid down is visible at the root")
     func rootListing() async throws {
         try await withVFS { vfs in
-            let entries = try await vfs.readDirectoryAll(vfs.root())
-            let seen = Set(entries.map(\.name))
-            let actual = Set(try FileManager.default
-                .contentsOfDirectory(atPath: env.root.path)
-                .filter { !$0.hasPrefix("fs9kit-scratch-") })
-            #expect(seen.isSuperset(of: actual),
-                    "server omitted \(actual.subtracting(seen))")
+            let names = Set(try await vfs.readDirectoryAll(vfs.root()).map(\.name))
+            // Only the files Scripts/interop.sh creates and never removes;
+            // anything else at the root belongs to another test case.
+            #expect(names.isSuperset(of: ["hello.txt", "dir", "big.bin"]),
+                    "server omitted \(Set(["hello.txt", "dir", "big.bin"]).subtracting(names))")
         }
     }
 

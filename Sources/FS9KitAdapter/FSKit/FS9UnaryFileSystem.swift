@@ -10,7 +10,14 @@
 // merely being present.
 #if FS9KIT_FSKIT && canImport(FSKit)
 import Foundation
-import FSKit
+// FSKit's protocol reply handlers are not `@Sendable`, so a witness that
+// declares them `@Sendable` does not satisfy the requirement — which then makes
+// the whole type fail to conform, and the extension entry point fail its
+// associated-type constraint. The handlers are therefore spelled exactly as the
+// framework spells them, and the import is `@preconcurrency` so that capturing
+// one in a Task is a warning about Apple's annotations rather than an error in
+// ours.
+@preconcurrency import FSKit
 import os
 import FS9Core
 import NineP
@@ -56,7 +63,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
     /// ever handed a path or block resource.
     public func probeResource(
         resource: FSResource,
-        replyHandler reply: @escaping @Sendable (FSProbeResult?, (any Error)?) -> Void
+        replyHandler reply: @escaping (FSProbeResult?, (any Error)?) -> Void
     ) {
         guard let url = Self.url(of: resource),
               let spec = try? MountSpec.parse(url.absoluteString) else {
@@ -73,7 +80,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
 
     public func loadResource(
         resource: FSResource, options: FSTaskOptions,
-        replyHandler reply: @escaping @Sendable (FSVolume?, (any Error)?) -> Void
+        replyHandler reply: @escaping (FSVolume?, (any Error)?) -> Void
     ) {
         guard let url = Self.url(of: resource) else {
             Logger.fs9kit.error("loadResource: resource carries no URL")
@@ -133,7 +140,7 @@ public final class FS9UnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOpera
 
     public func unloadResource(
         resource: FSResource, options: FSTaskOptions,
-        replyHandler reply: @escaping @Sendable ((any Error)?) -> Void
+        replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
         // Reset to `.ready`, or mounting the same URL again fails with
         // "Resource busy" ("resource state is 5") until `fskitd` is killed —
