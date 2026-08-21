@@ -146,10 +146,13 @@ being silently ignored.
 
 > **Use `p9://`, not `9p://`.**
 > `mount(8)` turns the argument into a resource with
-> `[NSURL URLWithString:argv[0]]`, and a URL scheme may not begin with a digit
-> under RFC 3986 — a strict parser returns `nil` for `9p://host/`. Both
-> spellings are registered in `FSSupportedSchemes` and the extension treats
-> them identically. See `docs/design/fskit-backend.md`.
+> `[NSURL URLWithString:argv[0]]` before the extension is reached, and a URL
+> scheme may not begin with a digit under RFC 3986. How strictly that is
+> enforced differs between Foundation implementations — swift-corelibs-foundation
+> returns `nil` for `9p://host/` — so `p9://` is the spelling that is safe
+> everywhere. Both are registered in `FSSupportedSchemes` and the extension
+> treats them identically; `Tests/FS9KitAdapterTests` records which way each
+> platform goes. See `docs/design/fskit-backend.md`.
 
 > **`9p+unix://` needs an extra entitlement.** A sandboxed extension cannot
 > reach an arbitrary unix socket on disk. Put the socket in an app-group

@@ -125,8 +125,10 @@ $ fs9p mount 127.0.0.1:5640 ~/nine
 ### The FSKit backend
 
 On macOS 26 and later there is a native path that does not involve a loopback
-NFS server. It needs an app installed and an extension enabled by hand; see
-[`macos/README.md`](macos/README.md).
+NFS server. It needs an app installed and an extension enabled by hand, and its
+mount URLs are spelled `p9://host:564/tree` — a URL scheme may not begin with a
+digit under RFC 3986, so `9p://` is registered as an alias but is not what the
+documentation tells you to type. See [`macos/README.md`](macos/README.md).
 
 ## What works
 

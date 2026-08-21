@@ -290,20 +290,17 @@ struct MountURLTests {
 /// Pins the reason `p9://` is the scheme the documentation tells people to use.
 ///
 /// `mount(8)` builds the resource with `[NSURL URLWithString:argv[0]]` before
-/// the extension is reached, so whatever Foundation refuses to parse can never
-/// get to our own parser however lenient that is. RFC 3986 says a scheme
-/// begins with a letter, and Foundation enforces it — which rules out `9p`.
+/// the extension is reached, so a scheme Foundation refuses to parse can never
+/// get to our own parser however lenient that is. RFC 3986 says a scheme begins
+/// with a letter, which rules out `9p` — but the two Foundations disagree about
+/// how strictly to enforce it, so the invariant worth asserting is that the
+/// documented scheme parses, not that the undocumented one fails.
 @Suite("URL scheme viability")
 struct SchemeViabilityTests {
-    @Test("Foundation rejects a scheme that starts with a digit")
-    func digitLeadingSchemeIsInvalid() {
-        #expect(URL(string: "9p://host:564/tree") == nil)
-        #expect(URL(string: "9pfs://host/tree") == nil)
-    }
-
-    @Test("the schemes we tell people to type do parse")
+    @Test("the schemes we tell people to type parse on this platform")
     func documentedSchemesParse() throws {
-        let tcp = try #require(URL(string: "p9://host:564/tree"))
+        let tcp = try #require(URL(string: "p9://host:564/tree"),
+                               "the documented mount scheme must survive NSURL")
         #expect(tcp.scheme == "p9")
         #expect(tcp.host == "host")
         #expect(tcp.port == 564)
@@ -311,6 +308,24 @@ struct SchemeViabilityTests {
         let unix = try #require(URL(string: "p9+unix:///tmp/ns/9p"))
         #expect(unix.scheme == "p9+unix")
         #expect(unix.path == "/tmp/ns/9p")
+    }
+
+    /// Not an assertion: the two Foundation implementations disagree, and which
+    /// one is in play decides whether `9p://` can ever reach the extension. The
+    /// documentation leads with `p9://` precisely so it does not matter, but
+    /// recording the answer here means the CI log says which way this platform
+    /// goes rather than leaving it to be rediscovered.
+    @Test("record whether a digit-leading scheme survives this Foundation")
+    func digitLeadingSchemeIsPlatformDependent() {
+        let parsed = URL(string: "9p://host:564/tree")
+        let platform = ProcessInfo.processInfo.operatingSystemVersionString
+        print("URL(string: \"9p://host:564/tree\") on \(platform): "
+            + (parsed == nil ? "nil — 9p:// cannot be used as a mount URL here"
+                             : "parsed as \(parsed!) — 9p:// would reach the extension here"))
+        // Whatever Foundation decides, our own parser must accept the string,
+        // because a user who types it should get a clear error from us and not
+        // a bare EINVAL from mount(8).
+        #expect(throws: Never.self) { _ = try MountSpec.parse("9p://host:564/tree") }
     }
 
     @Test("every advertised scheme is one our own parser accepts")

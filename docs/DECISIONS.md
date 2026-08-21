@@ -103,6 +103,12 @@ message.
   decoder also accepts servers that omit the redundant outer count.
 - **The `Rreaddir` `type[1]` byte is unreliable**: `p9ufs` writes the qid type
   (128) where `DT_DIR` (4) is specified. Classify from `qid.type` instead.
+- **A mount URL's scheme cannot begin with a digit**, or at least not
+  portably: `mount(8)` builds the resource with `[NSURL URLWithString:]` before
+  the extension runs, RFC 3986 requires a scheme to start with a letter, and
+  Foundation implementations differ on how strictly they enforce it. The
+  documented scheme is therefore `p9://`, with `9p://` kept as a registered
+  alias.
 - **Version negotiation is inconsistent.** `u9fs` downgrades correctly, `p9ufs`
   replies `unknown`, and `export9p` answers *nothing at all*. The handshake is
   therefore bounded by a timeout.
