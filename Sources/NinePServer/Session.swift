@@ -11,7 +11,7 @@ import NineP
 /// trivially correct — by the time a Tflush is decoded, the request it names
 /// has already been answered — at the cost of not overlapping slow reads on one
 /// connection.
-public final class NinePSession: @unchecked Sendable {
+public final class NinePServerSession: @unchecked Sendable {
     /// Bytes of overhead in an Rread/Rreaddir frame: size[4] type[1] tag[2] count[4].
     static let dataFrameOverhead = P9.headerSize + 4
     /// Difference between msize and the largest useful I/O chunk, matching the

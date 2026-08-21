@@ -5,10 +5,10 @@ import NineP
 
 @Suite("Version negotiation")
 struct VersionNegotiationTests {
-    private func session(_ configure: ((inout NinePServerConfiguration) -> Void)? = nil) -> NinePSession {
+    private func session(_ configure: ((inout NinePServerConfiguration) -> Void)? = nil) -> NinePServerSession {
         var configuration = NinePServerConfiguration()
         configure?(&configuration)
-        return NinePSession(fileSystem: MemoryFileSystem(), configuration: configuration)
+        return NinePServerSession(fileSystem: MemoryFileSystem(), configuration: configuration)
     }
 
     @Test("each supported dialect is echoed back", arguments: NinePVersion.allCases)

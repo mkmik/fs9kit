@@ -22,7 +22,7 @@ public struct TimeSpec: Sendable, Hashable {
 /// A path inside an exported tree, as a list of name components.
 ///
 /// The root is the empty component list. Components never contain `/`, `.` or
-/// `..`: ``NinePSession`` resolves those while walking, so a provider never has
+/// `..`: ``NinePServerSession`` resolves those while walking, so a provider never has
 /// to think about traversal (and cannot be tricked by it).
 public struct FilePath: Sendable, Hashable {
     public private(set) var components: [String]

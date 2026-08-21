@@ -36,7 +36,7 @@ POSIX sockets (TCP, Unix, inherited fd), version negotiation with fallback and a
 timeout, tag multiplexing over one reader thread, Tflush on task cancellation,
 fid pool, and a POSIX-shaped facade that papers over the dialects.
 
-## T3 — Reference 9P server (`Sources/NinePServer`) — *in progress*
+## T3 — Reference 9P server (`Sources/NinePServer`) — **done**
 
 Serves an in-memory tree or a real directory over all three dialects. Exists to
 be a hermetic test fixture and to back `fs9p serve`, which is useful for
@@ -48,25 +48,32 @@ debugging the client without a Linux box.
 reuse, attribute cache with a TTL, and the namespace operations both backends
 need. Everything protocol-specific stops here.
 
-## T5 — NFSv3 loopback backend (`Sources/FS9NFS`) — *in progress*
+## T5 — NFSv3 loopback backend (`Sources/FS9NFS`) — **done**
 
 XDR, ONC RPC with TCP record marking, MOUNT v3 and NFS v3 bound to `127.0.0.1`,
 so stock `mount_nfs` can mount the 9P tree. The default backend and the only one
 that can be proven end to end on hosted CI.
 
-## T6 — FSKit extension (`macos/`) — *in progress*
+## T6 — FSKit extension (`macos/`) — **built, unverified on hardware**
 
 `FSUnaryFileSystem` + `FSVolume` over `FS9Core`, using `FSGenericURLResource` so
 a URL rather than a block device can be mounted. macOS 26+. Ships as an app
 extension inside a containing app.
 
-## T7 — CLI (`Sources/fs9p`) — *in progress*
+CI builds the bundle and asserts on its `Info.plist` and entitlements, but
+**cannot mount it** — a third-party FSKit module is enabled by a per-user click
+in System Settings, with no CLI or MDM route. The glue itself is behind the
+`FS9KIT_FSKIT` compilation condition, because the macOS 15.4 SDK also has an
+FSKit and it lacks the API this needs. What still has to be checked by hand on
+a real macOS 26 Mac is listed in `docs/design/fskit-backend.md`.
+
+## T7 — CLI (`Sources/fs9p`) — **done**
 
 `fs9p mount|umount|serve|ls|cat|doctor`. `mount` starts the NFS bridge and
 invokes `mount_nfs`; `doctor` reports which backends this machine can use and
 why.
 
-## T8 — CI (`.github/workflows`) — *in progress*
+## T8 — CI (`.github/workflows`) — **done**
 
 Three tiers: unit tests everywhere; interop against `p9ufs` and `export9p`; a
 real `mount_nfs` end-to-end test on macOS runners. Plus an Xcode build of the

@@ -33,6 +33,11 @@ packages:
 
 settings:
   base:
+    # Turns on the FSKit half of FS9KitAdapter. SwiftPM leaves it off, because
+    # the macOS 15.4 SDK also has an FSKit — one without FSGenericURLResource
+    # and with non-Sendable reply handlers — so `canImport(FSKit)` alone would
+    # break every `swift build` on macOS 15.
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: FS9KIT_FSKIT
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "0.1.0"

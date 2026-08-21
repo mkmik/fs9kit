@@ -5,7 +5,7 @@ import NineP
 
 // MARK: - Session driving
 
-extension NinePSession {
+extension NinePServerSession {
     /// Sends one request and returns the reply body.
     func send(_ message: Message, tag: NineP.Tag = 1) -> Message {
         handle(Frame(tag: tag, message: message)).message
@@ -37,10 +37,10 @@ func makeSession(
     version: NinePVersion = .v9P2000L,
     msize: UInt32 = 8192,
     configure: ((inout NinePServerConfiguration) -> Void)? = nil
-) throws -> NinePSession {
+) throws -> NinePServerSession {
     var configuration = NinePServerConfiguration()
     configure?(&configuration)
-    let session = NinePSession(fileSystem: fileSystem, configuration: configuration)
+    let session = NinePServerSession(fileSystem: fileSystem, configuration: configuration)
     session.negotiate(version, msize: msize)
     try session.attachRoot()
     return session

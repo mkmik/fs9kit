@@ -1,7 +1,7 @@
 import Foundation
 import NineP
 
-/// Knobs for ``NinePServer`` and ``NinePSession``.
+/// Knobs for ``NinePServer`` and ``NinePServerSession``.
 public struct NinePServerConfiguration: Sendable {
     /// Largest frame the server will accept or emit. Tversion clamps the
     /// client's proposal to this.

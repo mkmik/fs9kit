@@ -7,7 +7,7 @@ import Glibc
 #endif
 
 /// Framing for one connection: reads `size[4]`-prefixed frames off a socket,
-/// hands them to a ``NinePSession`` and writes the replies back.
+/// hands them to a ``NinePServerSession`` and writes the replies back.
 ///
 /// Nothing here interprets a message beyond its type and tag. That split is
 /// what lets the session switch dialect mid-stream: the frame boundaries are
@@ -15,10 +15,10 @@ import Glibc
 /// an error even when the body is nonsense.
 final class NinePConnection {
     private let fd: Int32
-    private let session: NinePSession
+    private let session: NinePServerSession
     private let configuration: NinePServerConfiguration
 
-    init(fd: Int32, session: NinePSession, configuration: NinePServerConfiguration) {
+    init(fd: Int32, session: NinePServerSession, configuration: NinePServerConfiguration) {
         self.fd = fd
         self.session = session
         self.configuration = configuration

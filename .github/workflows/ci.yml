@@ -47,6 +47,13 @@ jobs:
         run: swift build --build-tests
       - name: Test
         run: swift test
+      # The FSKit glue is compiled out of a plain `swift build`, because the
+      # macOS 15.4 SDK ships an FSKit without the API this needs. On a macOS 26
+      # runner the SDK does have it, so type-check it here rather than waiting
+      # for the Xcode job.
+      - name: Type-check the FSKit backend
+        if: matrix.runner == 'macos-26'
+        run: swift build -Xswiftc -DFS9KIT_FSKIT --target FS9KitAdapter
 
   # Runs the client against 9P servers written by other people, in another
   # language, from the same specs. A client tested only against its own server

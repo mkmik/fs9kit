@@ -1,4 +1,14 @@
-#if canImport(FSKit)
+// Compiled only when FS9KIT_FSKIT is defined, which the Xcode project sets and
+// SwiftPM does not.
+//
+// `canImport(FSKit)` is not a strong enough gate: the framework exists in the
+// macOS 15.4 SDK too, but there it has no FSGenericURLResource — the class that
+// makes it possible to mount something with no block device behind it — and its
+// protocol reply handlers are not Sendable. Compiling this against that SDK
+// fails on both counts. The whole backend needs macOS 26 or later, so it is
+// gated on a flag the macOS 26 build turns on rather than on the framework
+// merely being present.
+#if FS9KIT_FSKIT && canImport(FSKit)
 import Foundation
 import FSKit
 import FS9Core

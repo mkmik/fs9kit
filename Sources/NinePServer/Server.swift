@@ -22,7 +22,7 @@ public enum NinePServerStartupError: Error, Sendable, CustomStringConvertible {
     }
 }
 
-/// A 9P server: accepts connections and runs a ``NinePSession`` on each.
+/// A 9P server: accepts connections and runs a ``NinePServerSession`` on each.
 ///
 /// One thread accepts on each endpoint and one thread serves each connection,
 /// with blocking reads. That is a lot of threads for a huge fanout, but this
@@ -239,7 +239,7 @@ public final class NinePServer: @unchecked Sendable {
         }
         let connection = NinePConnection(
             fd: fd,
-            session: NinePSession(fileSystem: fileSystem, configuration: configuration),
+            session: NinePServerSession(fileSystem: fileSystem, configuration: configuration),
             configuration: configuration)
         connection.run()
         lock.withLock { _ = connections.remove(fd) }

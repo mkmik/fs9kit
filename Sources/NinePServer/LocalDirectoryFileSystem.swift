@@ -12,7 +12,7 @@ import Glibc
 /// library is built by `realpath`-ing the parent chain and checking that the
 /// result is still under the exported root, so neither a `..` component nor a
 /// symbolic link — absolute or not — can reach a file outside it. `..` never
-/// even reaches here (``NinePSession`` folds it while walking), but the check
+/// even reaches here (``NinePServerSession`` folds it while walking), but the check
 /// does not rely on that.
 public final class LocalDirectoryFileSystem: NinePFileServer, @unchecked Sendable {
     public struct Options: Sendable {

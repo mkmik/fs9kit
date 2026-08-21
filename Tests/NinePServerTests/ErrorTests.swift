@@ -8,7 +8,7 @@ struct ErrorMappingTests {
     /// The same failure, asked for in each dialect: 9P2000.L must answer with a
     /// bare errno, the other two with a message a human can read.
     private func failure(_ version: NinePVersion,
-                         _ body: (NinePSession) -> Message) throws -> Message {
+                         _ body: (NinePServerSession) -> Message) throws -> Message {
         body(try makeSession(try sampleTree(), version: version))
     }
 

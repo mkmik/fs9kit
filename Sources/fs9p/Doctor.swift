@@ -51,7 +51,7 @@ enum Doctor {
         var size = buffer.count
         #if canImport(Darwin)
         if sysctlbyname("hw.machine", &buffer, &size, nil, 0) == 0 {
-            return String(cString: buffer)
+            return String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
         #endif
         return "unknown"
