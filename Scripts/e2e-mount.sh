@@ -24,6 +24,29 @@ failures=0
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
+# Every command that touches the mount runs under a deadline. A wedged mount
+# point otherwise turns a failing check into a job that holds a runner until
+# CI's own limit, with no output to say why.
+#
+# Base macOS ships no timeout(1) — it is GNU coreutils — so fall back to a
+# watchdog rather than assuming one is installed.
+if command -v timeout >/dev/null 2>&1; then
+    run() { timeout "${1}s" "${@:2}"; }
+elif command -v gtimeout >/dev/null 2>&1; then
+    run() { gtimeout "${1}s" "${@:2}"; }
+else
+    run() {
+        local secs="$1"; shift
+        "$@" &
+        local pid=$! status=0
+        ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+        local watchdog=$!
+        wait "$pid" || status=$?
+        kill "$watchdog" 2>/dev/null
+        return "$status"
+    }
+fi
+
 # Anything backgrounded gets its own log file rather than the step's stdout:
 # a process still holding that pipe keeps the CI step alive after the script
 # has finished, which reads as a hang rather than a result.
@@ -34,7 +57,7 @@ fail() { printf '   FAIL %s\n' "$*"; failures=$((failures + 1)); }
 
 check() {
     local label="$1"; shift
-    if "$@" >/dev/null 2>&1; then ok "$label"; else fail "$label"; fi
+    if run 60 "$@" >/dev/null 2>&1; then ok "$label"; else fail "$label"; fi
 }
 
 check_equal() {
@@ -49,7 +72,9 @@ check_equal() {
 cleanup() {
     set +e
     if [[ -n "$mountpoint" ]] && mount | grep -q " $mountpoint "; then
-        sudo umount -f "$mountpoint" 2>/dev/null
+        # Bounded: unmounting a wedged mount can block as long as the mount's
+        # own retry budget, and this runs on the way out of a failure.
+        run 30 sudo umount -f "$mountpoint" 2>/dev/null
     fi
     [[ -n "$mount_pid" ]] && kill "$mount_pid" 2>/dev/null
     [[ -n "$mount_log" && -f "$mount_log" ]] && { echo "--- fs9p mount log"; cat "$mount_log"; rm -f "$mount_log"; }
@@ -130,15 +155,15 @@ mount | grep " $mountpoint " || true
 # ---------------------------------------------------------------- exercise
 
 log "Reading"
-check_equal "cat a small file" "hello from 9p" "$(cat "$mountpoint/hello.txt")"
-check_equal "cat through a subdirectory" "deep content" "$(cat "$mountpoint/dir/nested/deep.txt")"
+check_equal "cat a small file" "hello from 9p" "$(run 30 cat "$mountpoint/hello.txt")"
+check_equal "cat through a subdirectory" "deep content" "$(run 30 cat "$mountpoint/dir/nested/deep.txt")"
 check_equal "a 4 MiB file survives the round trip" "$big_sum" \
-    "$(shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1)"
+    "$(run 120 shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1)"
 check_equal "ls counts the directory correctly" \
     "$(ls -1 "$fixture/dir" | wc -l | tr -d ' ')" \
-    "$(ls -1 "$mountpoint/dir" | wc -l | tr -d ' ')"
+    "$(run 60 ls -1 "$mountpoint/dir" | wc -l | tr -d ' ')"
 check_equal "stat reports the right size" "$(stat -f%z "$fixture/hello.txt")" \
-    "$(stat -f%z "$mountpoint/hello.txt")"
+    "$(run 30 stat -f%z "$mountpoint/hello.txt")"
 check "find walks the whole tree" find "$mountpoint" -type f
 check_equal "seeking into a file works" "content" \
     "$(dd if="$mountpoint/dir/nested/deep.txt" bs=1 skip=5 count=7 2>/dev/null)"
@@ -149,9 +174,9 @@ echo "written through the mount" > "$mountpoint/new.txt"
 check_equal "a new file lands on the server" "written through the mount" \
     "$(cat "$fixture/new.txt")"
 check_equal "and reads back through the mount" "written through the mount" \
-    "$(cat "$mountpoint/new.txt")"
+    "$(run 30 cat "$mountpoint/new.txt")"
 
-cp "$fixture/big.bin" "$mountpoint/copied.bin"
+run 120 cp "$fixture/big.bin" "$mountpoint/copied.bin"
 check_equal "copying 4 MiB in preserves every byte" "$big_sum" \
     "$(shasum -a 256 "$fixture/copied.bin" | cut -d' ' -f1)"
 
@@ -175,7 +200,7 @@ check "rmdir removes the directory" test ! -d "$fixture/made"
 
 if ln -s hello.txt "$mountpoint/link" 2>/dev/null; then
     check_equal "a symlink created through the mount resolves" "hello from 9p" \
-        "$(cat "$mountpoint/link")"
+        "$(run 30 cat "$mountpoint/link")"
     check_equal "and points where it should" "hello.txt" \
         "$(readlink "$mountpoint/link")"
 else
@@ -192,7 +217,7 @@ check_equal "truncate empties the file" "0" "$(stat -f%z "$fixture/new.txt")"
 
 log "Concurrency"
 for i in 1 2 3 4 5 6 7 8; do
-    ( shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1 > "$fixture/sum.$i" ) &
+    ( run 180 shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1 > "$fixture/sum.$i" ) &
 done
 wait
 concurrent_ok=yes
@@ -204,7 +229,7 @@ check_equal "eight concurrent readers all agree" "yes" "$concurrent_ok"
 # ---------------------------------------------------------------- unmount
 
 log "Unmounting"
-"$fs9p" umount "$mountpoint"
+run 60 "$fs9p" umount "$mountpoint"
 sleep 0.5
 if mount | grep -q " $mountpoint "; then fail "still mounted"; else ok "unmounted cleanly"; fi
 

@@ -144,6 +144,11 @@ public enum NFSMountCommand {
     /// - `soft` — a hung bridge must surface as EIO to the application rather
     ///   than an uninterruptible process. This is a userspace server that can
     ///   exit; hard mounts would leave unkillable processes behind.
+    /// - `timeo=50,retrans=2` — five seconds per attempt and two retries, so a
+    ///   stalled bridge gives up in about fifteen seconds. `soft` alone leaves
+    ///   the client on its defaults, which retry for long enough that a dead
+    ///   bridge looks like a hang rather than an error — and an unmount of a
+    ///   wedged mount inherits that wait.
     /// - `nolocks,locallocks` — we implement no NLM (lockd) at all. `nolocks`
     ///   stops the client trying to reach one; `locallocks` makes `flock` and
     ///   `fcntl` locks work between processes on this machine, which is what
@@ -165,6 +170,8 @@ public enum NFSMountCommand {
             "port=\(port)",
             "mountport=\(port)",
             "soft",
+            "timeo=50",
+            "retrans=2",
             "nolocks",
             "locallocks",
             "rsize=\(transferSize)",
