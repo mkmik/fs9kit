@@ -123,7 +123,8 @@ check_equal "cat a small file" "hello from 9p" "$(cat "$mountpoint/hello.txt")"
 check_equal "cat through a subdirectory" "deep content" "$(cat "$mountpoint/dir/nested/deep.txt")"
 check_equal "a 4 MiB file survives the round trip" "$big_sum" \
     "$(shasum -a 256 "$mountpoint/big.bin" | cut -d' ' -f1)"
-check_equal "ls counts the directory correctly" "203" \
+check_equal "ls counts the directory correctly" \
+    "$(ls -1 "$fixture/dir" | wc -l | tr -d ' ')" \
     "$(ls -1 "$mountpoint/dir" | wc -l | tr -d ' ')"
 check_equal "stat reports the right size" "$(stat -f%z "$fixture/hello.txt")" \
     "$(stat -f%z "$mountpoint/hello.txt")"
