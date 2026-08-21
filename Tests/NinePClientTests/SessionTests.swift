@@ -370,7 +370,7 @@ struct EndpointTests {
         #expect(try NinePEndpoint.parse("127.0.0.1:1234") == .tcp(host: "127.0.0.1", port: 1234))
         #expect(try NinePEndpoint.parse("myhost") == .tcp(host: "myhost", port: 564))
         #expect(try NinePEndpoint.parse("[::1]:9999") == .tcp(host: "::1", port: 9999))
-        #expect(throws: NinePClientError.self) { _ = try NinePEndpoint.parse("bogus!x!1") }
+        #expect(throws: NinePEndpoint.ParseError.self) { _ = try NinePEndpoint.parse("bogus!x!1") }
     }
 }
 

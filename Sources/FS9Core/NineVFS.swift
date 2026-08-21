@@ -265,13 +265,18 @@ public actor NineVFS {
 
     // MARK: - Lookup and attributes
 
-    public func root() -> NodeID { Self.rootNode }
+    /// Nonisolated because it is a constant: callers should not have to await
+    /// the actor just to name the root.
+    public nonisolated func root() -> NodeID { Self.rootNode }
 
     /// Resolves one path component.
     public func lookup(parent: NodeID, name: String) async throws -> (node: NodeID, attributes: FileAttributes) {
         guard !name.isEmpty, name != ".", !name.contains("/") else {
             throw FSError.invalidArgument
         }
+        // Catch an over-long name here rather than sending it to a server that
+        // will answer with something less specific.
+        guard name.utf8.count <= 255 else { throw FSError.nameTooLong }
         guard name != ".." else {
             let child = try node(parent)
             let up = child.parent ?? Self.rootNode

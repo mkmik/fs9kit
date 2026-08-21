@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>fs9kit (9P)</string>
+	<key>CFBundleName</key>
+	<string>FS9KitExtension</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<!-- An app extension is an XPC bundle, not an application. -->
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+
+	<!-- ExtensionKit form. Apple's in-tree modules (hfs_appex, msdos_appex)
+	     still use the older NSExtension/NSExtensionPointIdentifier keys; new
+	     modules, including Apple's own macOS 26 sample, use this one. -->
+	<key>EXAppExtensionAttributes</key>
+	<dict>
+		<!-- The FSKit extension point. Note it is "fsmodule", not "unary":
+		     unary vs. multi-resource is decided by which classes you conform
+		     to, not by the extension point. -->
+		<key>EXExtensionPointIdentifier</key>
+		<string>com.apple.fskit.fsmodule</string>
+
+		<!-- EXExtensionPrincipalClass is deliberately absent. It is only for
+		     modules whose principal class is Objective-C; a Swift extension
+		     with @main declares its entry point in code. -->
+
+		<!-- The name after `mount -t`. This is the key mount(8) resolves. -->
+		<key>FSShortName</key>
+		<string>fs9kit</string>
+
+		<!-- There is no disk. mount(8) picks how to read its "device" argument
+		     from these four flags, in this exact order, first match wins:
+		     Block -> PathURL -> GenericURL -> ServerURL. Only GenericURL
+		     causes argv[0] to be parsed as a full URL string, which is what
+		     turns `9p://host:564/tree` into an FSGenericURLResource. -->
+		<key>FSSupportsBlockResources</key>
+		<false/>
+		<key>FSSupportsPathURLs</key>
+		<false/>
+		<key>FSSupportsGenericURLResources</key>
+		<true/>
+		<!-- FSServerURLResource is private API and App Store poison. -->
+		<key>FSSupportsServerURLs</key>
+		<false/>
+
+		<!-- Case-insensitive URL schemes this module answers for.
+		     `9p` is the natural spelling and the one to document, but note
+		     that a scheme may not begin with a digit under RFC 3986, and
+		     mount(8) builds the resource with [NSURL URLWithString:argv[0]].
+		     `p9` is registered as the spelling no URL parser can reject; see
+		     docs/design/fskit-backend.md. -->
+		<key>FSSupportedSchemes</key>
+		<array>
+			<string>9p</string>
+			<string>9pfs</string>
+			<string>p9</string>
+			<string>9p+unix</string>
+			<string>9pfs+unix</string>
+			<string>p9+unix</string>
+		</array>
+
+		<!-- getopt(3) spec for `mount -o ...`. Without this key mount(8)
+		     reports "does not support operation mount" and never reaches the
+		     module; without the `o:` in it, any `-o` is a parse error. -->
+		<key>FSActivateOptionSyntax</key>
+		<dict>
+			<key>shortOptions</key>
+			<string>o:</string>
+		</dict>
+
+		<!-- No fsck and no newfs: mount(8) refuses both for a URL resource,
+		     and there is nothing on this side of the wire to check or format.
+		     The keys are omitted rather than set empty so the intent is clear.
+
+		     FSMediaTypes is block-device probing; empty for a network module. -->
+		<key>FSMediaTypes</key>
+		<dict/>
+
+		<key>FSPersonalities</key>
+		<dict>
+			<key>fs9kit</key>
+			<dict>
+				<key>FSName</key>
+				<string>9P (fs9kit)</string>
+				<!-- 9P servers are overwhelmingly case-sensitive, and claiming
+				     otherwise hides files whose names differ only in case. -->
+				<key>FSfileObjectsAreCaseSensitive</key>
+				<true/>
+				<key>FSfileObjectsAreCasePreserving</key>
+				<true/>
+				<key>FSvolumeNameIsCasePreserving</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

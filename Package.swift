@@ -27,6 +27,7 @@ let package = Package(
         .testTarget(name: "NinePServerTests", dependencies: ["NinePServer", "NineP"]),
         .testTarget(name: "NinePClientTests", dependencies: ["NinePClient"]),
         .testTarget(name: "FS9KitAdapterTests", dependencies: ["FS9KitAdapter"]),
+        .testTarget(name: "FS9CoreTests", dependencies: ["FS9Core", "NinePServer"]),
         .testTarget(name: "InteropTests", dependencies: ["NinePClient", "FS9Core"]),
         .testTarget(name: "FS9NFSTests",
                     dependencies: ["FS9NFS", "FS9Core", "NinePClient", "NinePServer"]),

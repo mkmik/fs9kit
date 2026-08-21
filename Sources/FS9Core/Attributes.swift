@@ -213,6 +213,13 @@ public struct FSError: Error, CustomStringConvertible, Equatable {
         return detail.isEmpty ? base : "\(base): \(detail)"
     }
 
+    /// Two errors are equal when they carry the same errno.
+    ///
+    /// `detail` is diagnostic text — where the failure came from, what the
+    /// server said — and varies with the server on the other end. Callers, and
+    /// the kernel behind them, only ever act on the number.
+    public static func == (a: FSError, b: FSError) -> Bool { a.errno == b.errno }
+
     public static let notFound = FSError(ENOENT)
     public static let notDirectory = FSError(ENOTDIR)
     public static let isDirectory = FSError(EISDIR)

@@ -6,12 +6,12 @@ import Darwin
 import Glibc
 #endif
 
-/// Linux errno values.
+/// Named Linux errno values, on top of the translation table in ``NineP``.
 ///
-/// A 9P2000.L server puts a bare errno on the wire and the peer interprets it
-/// with *Linux* numbering, so these must not be taken from the host's headers:
-/// `ENOTEMPTY` is 39 on Linux but 66 on Darwin, and several others differ too.
-public enum LinuxErrno {
+/// 9P2000.L puts *Linux* numbers on the wire whatever the host runs, so these
+/// are spelled out rather than taken from the platform's headers: `ENOTEMPTY`
+/// is 39 on Linux and 66 on Darwin, and the two disagree at 11 as well.
+extension LinuxErrno {
     public static let eperm: UInt32 = 1
     public static let enoent: UInt32 = 2
     public static let esrch: UInt32 = 3
@@ -46,6 +46,11 @@ public enum LinuxErrno {
     public static let emsgsize: UInt32 = 90
     public static let eopnotsupp: UInt32 = 95
     public static let econnreset: UInt32 = 104
+
+    /// The wire value for a host errno: the Linux number, unsigned.
+    public static func wireValue(forHost code: Int32) -> UInt32 {
+        UInt32(bitPattern: fromHost(code))
+    }
 }
 
 /// A failure that can be turned into any of the three 9P error replies.
@@ -98,53 +103,12 @@ public struct NinePServerError: Error, Sendable, Hashable, CustomStringConvertib
         NinePServerError(errno: LinuxErrno.eio, message: what)
     }
 
-    /// Translates a host `errno` into the Linux-numbered equivalent.
-    ///
-    /// Codes we do not know about are passed through unchanged; that is wrong
-    /// on Darwin for exotic values but better than inventing an EIO.
+    /// Translates a host `errno` into a failure carrying the Linux-numbered
+    /// equivalent, which is what every dialect expects on the wire.
     public static func fromHostErrno(_ code: Int32, while action: String? = nil) -> NinePServerError {
         let text = String(cString: strerror(code))
         let message = action.map { "\($0): \(text)" } ?? text
-        return NinePServerError(errno: linuxErrno(forHost: code), message: message)
-    }
-
-    static func linuxErrno(forHost code: Int32) -> UInt32 {
-        switch code {
-        case EPERM: return LinuxErrno.eperm
-        case ENOENT: return LinuxErrno.enoent
-        case ESRCH: return LinuxErrno.esrch
-        case EINTR: return LinuxErrno.eintr
-        case EIO: return LinuxErrno.eio
-        case ENXIO: return LinuxErrno.enxio
-        case EBADF: return LinuxErrno.ebadf
-        case EAGAIN: return LinuxErrno.eagain
-        case ENOMEM: return LinuxErrno.enomem
-        case EACCES: return LinuxErrno.eacces
-        case EFAULT: return LinuxErrno.efault
-        case EBUSY: return LinuxErrno.ebusy
-        case EEXIST: return LinuxErrno.eexist
-        case EXDEV: return LinuxErrno.exdev
-        case ENODEV: return LinuxErrno.enodev
-        case ENOTDIR: return LinuxErrno.enotdir
-        case EISDIR: return LinuxErrno.eisdir
-        case EINVAL: return LinuxErrno.einval
-        case ENFILE: return LinuxErrno.enfile
-        case EMFILE: return LinuxErrno.emfile
-        case EFBIG: return LinuxErrno.efbig
-        case ENOSPC: return LinuxErrno.enospc
-        case ESPIPE: return LinuxErrno.espipe
-        case EROFS: return LinuxErrno.erofs
-        case EMLINK: return LinuxErrno.emlink
-        case ENAMETOOLONG: return LinuxErrno.enametoolong
-        case ENOSYS: return LinuxErrno.enosys
-        case ENOTEMPTY: return LinuxErrno.enotempty
-        case ELOOP: return LinuxErrno.eloop
-        case EPROTO: return LinuxErrno.eproto
-        case EMSGSIZE: return LinuxErrno.emsgsize
-        case EOPNOTSUPP: return LinuxErrno.eopnotsupp
-        case ECONNRESET: return LinuxErrno.econnreset
-        default: return UInt32(bitPattern: code)
-        }
+        return NinePServerError(errno: LinuxErrno.wireValue(forHost: code), message: message)
     }
 }
 

@@ -13,7 +13,7 @@ import NineP
 /// connection.
 public final class NinePSession: @unchecked Sendable {
     /// Bytes of overhead in an Rread/Rreaddir frame: size[4] type[1] tag[2] count[4].
-    static let dataFrameOverhead = NineP.headerSize + 4
+    static let dataFrameOverhead = P9.headerSize + 4
     /// Difference between msize and the largest useful I/O chunk, matching the
     /// `IOHDRSZ` every other 9P implementation uses.
     static let ioHeaderSize: UInt32 = 24
@@ -156,7 +156,7 @@ public final class NinePSession: @unchecked Sendable {
     }
 
     private func lookup(_ fid: Fid) throws -> FidState {
-        guard fid != NineP.nofid, let state = fids[fid] else {
+        guard fid != P9.nofid, let state = fids[fid] else {
             throw NinePServerError.badFileDescriptor("unknown fid \(fid)")
         }
         guard !state.isXattr else {
@@ -216,7 +216,7 @@ public final class NinePSession: @unchecked Sendable {
             throw NinePServerError.notSupported("authentication is not required")
 
         case let .tattach(fid, _, uname, aname, numericUID):
-            guard fid != NineP.nofid else { throw NinePServerError.invalidArgument("bad fid") }
+            guard fid != P9.nofid else { throw NinePServerError.invalidArgument("bad fid") }
             guard fids[fid] == nil else { throw NinePServerError.invalidArgument("fid \(fid) is in use") }
             let uid = numericUID ?? UInt32.max
             let attached = try fileSystem.attach(uname: uname, aname: aname, uid: uid)
@@ -511,13 +511,13 @@ public final class NinePSession: @unchecked Sendable {
     // MARK: - Walk
 
     private func handleWalk(tag: Tag, fid: Fid, newfid: Fid, names: [String]) throws -> Frame {
-        guard names.count <= NineP.maxWalkElements else {
-            throw NinePServerError.invalidArgument("a walk may carry at most \(NineP.maxWalkElements) names")
+        guard names.count <= P9.maxWalkElements else {
+            throw NinePServerError.invalidArgument("a walk may carry at most \(P9.maxWalkElements) names")
         }
         let state = try lookup(fid)
         guard !state.isOpen else { throw NinePServerError.invalidArgument("cannot walk an open fid") }
         if newfid != fid {
-            guard newfid != NineP.nofid else { throw NinePServerError.invalidArgument("bad newfid") }
+            guard newfid != P9.nofid else { throw NinePServerError.invalidArgument("bad newfid") }
             guard fids[newfid] == nil else { throw NinePServerError.invalidArgument("newfid \(newfid) is in use") }
         }
 

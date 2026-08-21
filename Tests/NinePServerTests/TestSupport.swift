@@ -7,19 +7,19 @@ import NineP
 
 extension NinePSession {
     /// Sends one request and returns the reply body.
-    func send(_ message: Message, tag: Tag = 1) -> Message {
+    func send(_ message: Message, tag: NineP.Tag = 1) -> Message {
         handle(Frame(tag: tag, message: message)).message
     }
 
     @discardableResult
     func negotiate(_ version: NinePVersion, msize: UInt32 = 8192) -> Message {
-        send(.tversion(msize: msize, version: version.rawValue), tag: NineP.notag)
+        send(.tversion(msize: msize, version: version.rawValue), tag: P9.notag)
     }
 
     /// Attaches fid 0 to the root and returns its qid.
     @discardableResult
-    func attachRoot(fid: Fid = 0, aname: String = "") throws -> Qid {
-        let reply = send(.tattach(fid: fid, afid: NineP.nofid, uname: "tester",
+    func attachRoot(fid: NineP.Fid = 0, aname: String = "") throws -> Qid {
+        let reply = send(.tattach(fid: fid, afid: P9.nofid, uname: "tester",
                                   aname: aname, numericUID: 1000))
         guard case let .rattach(qid) = reply else {
             Issue.record("expected Rattach, got \(reply)")

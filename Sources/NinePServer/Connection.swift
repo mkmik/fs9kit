@@ -32,7 +32,7 @@ final class NinePConnection {
                 | UInt32(sizeBytes[2]) << 16 | UInt32(sizeBytes[3]) << 24
             // A frame too short to hold a header carries no tag, so there is
             // nobody to answer: the stream is desynchronised and must end.
-            guard size >= UInt32(NineP.headerSize) else { return }
+            guard size >= UInt32(P9.headerSize) else { return }
             if size > session.msize {
                 guard rejectOversized(size: size) else { return }
                 continue
@@ -86,7 +86,7 @@ final class NinePConnection {
     private func rejectOversized(size: UInt32) -> Bool {
         guard let header = readExactly(3) else { return false }
         let tag = Tag(header[1]) | Tag(header[2]) << 8
-        let remaining = Int(size) - NineP.headerSize
+        let remaining = Int(size) - P9.headerSize
         guard remaining <= configuration.maxDrainBytes, discard(remaining) else { return false }
         let error = NinePServerError(
             errno: LinuxErrno.emsgsize,
