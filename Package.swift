@@ -5,6 +5,7 @@ let package = Package(
     name: "fs9kit",
     platforms: [.macOS(.v13)],
     products: [
+        .executable(name: "fs9p", targets: ["fs9p"]),
         .library(name: "NineP", targets: ["NineP"]),
         .library(name: "NinePClient", targets: ["NinePClient"]),
         .library(name: "NinePServer", targets: ["NinePServer"]),
@@ -13,6 +14,9 @@ let package = Package(
         .library(name: "FS9NFS", targets: ["FS9NFS"]),
     ],
     targets: [
+        .executableTarget(
+            name: "fs9p",
+            dependencies: ["NineP", "NinePClient", "FS9Core", "FS9NFS", "NinePServer"]),
         .target(name: "NineP"),
         .target(name: "NinePClient", dependencies: ["NineP"]),
         .target(name: "NinePServer", dependencies: ["NineP"]),

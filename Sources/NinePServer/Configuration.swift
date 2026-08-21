@@ -1,30 +1,11 @@
 import Foundation
 import NineP
 
-/// Somewhere a server listens.
-public enum NinePEndpoint: Sendable, Hashable, CustomStringConvertible {
-    case tcp(host: String, port: UInt16)
-    /// A Unix domain socket. The path is removed when the server stops.
-    case unix(path: String)
-
-    public var description: String {
-        switch self {
-        case let .tcp(host, port): return "tcp://\(host):\(port)"
-        case let .unix(path): return "unix:\(path)"
-        }
-    }
-
-    public var port: UInt16? {
-        if case let .tcp(_, port) = self { return port }
-        return nil
-    }
-}
-
 /// Knobs for ``NinePServer`` and ``NinePSession``.
 public struct NinePServerConfiguration: Sendable {
     /// Largest frame the server will accept or emit. Tversion clamps the
     /// client's proposal to this.
-    public var maxMessageSize: UInt32 = NineP.defaultMsize
+    public var maxMessageSize: UInt32 = P9.defaultMsize
     /// Smallest msize worth negotiating. Below this a single directory entry
     /// may not fit in a reply, so the server answers `unknown` instead of
     /// agreeing to something it cannot serve.

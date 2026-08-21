@@ -54,7 +54,7 @@ public final class NinePServer: @unchecked Sendable {
     public var boundEndpoints: [NinePEndpoint] { lock.withLock { endpoints } }
 
     /// Convenience for the common single-TCP-endpoint case.
-    public var boundPort: UInt16? { boundEndpoints.compactMap(\.port).first }
+    public var boundPort: Int? { boundEndpoints.compactMap(\.port).first }
 
     /// Binds every configured endpoint and starts accepting.
     @discardableResult
@@ -115,13 +115,21 @@ public final class NinePServer: @unchecked Sendable {
 
     private func listen(on endpoint: NinePEndpoint) throws -> (fd: Int32, resolved: NinePEndpoint) {
         switch endpoint {
+        case let .fileDescriptor(fd):
+            // An inherited listening socket: the caller already bound it, so
+            // there is nothing to resolve.
+            guard sysListen(fd, configuration.backlog) == 0 || sysErrno() == EINVAL else {
+                throw NinePServerStartupError.socket("listen", sysErrno())
+            }
+            return (fd, endpoint)
+
         case let .tcp(host, port):
             let fd = sysSocket(AF_INET, sysSockStream, 0)
             guard fd >= 0 else { throw NinePServerStartupError.socket("socket", sysErrno()) }
             sysSetIntOption(fd, SOL_SOCKET, SO_REUSEADDR, 1)
             var addr = sockaddr_in()
             addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = port.bigEndian
+            addr.sin_port = in_port_t(UInt16(truncatingIfNeeded: port)).bigEndian
             guard host.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
                 sysClose(fd)
                 throw NinePServerStartupError.socket("inet_pton(\(host))", EINVAL)
@@ -151,7 +159,7 @@ public final class NinePServer: @unchecked Sendable {
                     sysGetSockName(fd, $0, &length)
                 }
             }
-            let realPort = assigned == 0 ? UInt16(bigEndian: actual.sin_port) : port
+            let realPort = assigned == 0 ? Int(UInt16(bigEndian: actual.sin_port)) : port
             return (fd, .tcp(host: host, port: realPort))
 
         case let .unix(path):

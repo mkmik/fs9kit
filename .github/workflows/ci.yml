@@ -48,6 +48,66 @@ jobs:
       - name: Test
         run: swift test
 
+  # Runs the client against 9P servers written by other people, in another
+  # language, from the same specs. A client tested only against its own server
+  # proves very little: both ends can share the same misreading.
+  interop:
+    name: Interop (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      - name: Cache Go binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: interop-servers-${{ matrix.runner }}-v1
+      - name: Interop against p9ufs (9P2000.L) and export9p (9P2000)
+        run: Scripts/interop.sh all
+
+  # The reality check: mount a 9P server through the kernel's own NFS client
+  # and use it with ordinary tools. Everything else in the suite talks to our
+  # own code; this talks to the kernel.
+  mount-e2e:
+    name: Mount end to end (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mount a tree served by fs9p and exercise it
+        run: Scripts/e2e-mount.sh fs9p
+      - name: Show NFS statistics
+        if: always()
+        run: nfsstat -c 2>/dev/null | head -30 || true
+
+  # Same again, but with a third-party 9P server behind the mount, so the
+  # whole stack is proven against an implementation we did not write.
+  mount-e2e-interop:
+    name: Mount a third-party server (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      - name: Mount a tree served by p9ufs and exercise it
+        run: Scripts/e2e-mount.sh p9ufs
+
   # Gathers ground truth about what a hosted macOS runner can actually do, so
   # the mount backends can be designed against reality rather than guesses.
   probe:
