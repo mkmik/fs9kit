@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Deliberately NOT com.apple.security.app-sandbox.
+	     Apple's DTS is explicit: "Calling /sbin/mount is not possible with App
+	     Sandbox enabled" (FB20186709). This app's whole reason to exist is to
+	     host the extension and to show — and, if it ever grows a Mount button,
+	     to run — the mount command. Sandboxing it would break that, and it is
+	     also why a self-mounting FSKit client cannot ship on the Mac App Store
+	     until macOS 27's FSClient.mountSingleVolume.
+
+	     The extension IS sandboxed; see FS9KitExtension.entitlements. -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+</dict>
+</plist>

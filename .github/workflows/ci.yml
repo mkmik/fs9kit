@@ -1,0 +1,251 @@
+name: CI
+
+# A branch with an open pull request would otherwise run everything twice, once
+# for the push and once for the pull request, and the macOS runner pool is the
+# bottleneck. Pushes are only interesting on the default branch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (Swift ${{ matrix.swift }})
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    container: swift:${{ matrix.swift }}
+    strategy:
+      fail-fast: false
+      matrix:
+        swift: ["6.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      # Same reason as the test step: parallel compilation pushes the errors
+      # far above the end of the log, and the end is what survives truncation.
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            echo "::group::build errors"
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -60
+            echo "::endgroup::"
+            exit 1
+          }
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::failures"
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | grep -v " skipped\.$" | head -60
+            echo "::endgroup::"
+            exit 1
+          }
+
+  macos:
+    name: macOS (${{ matrix.runner }})
+    timeout-minutes: 25
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+      # Same reason as the test step: parallel compilation pushes the errors
+      # far above the end of the log, and the end is what survives truncation.
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            echo "::group::build errors"
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -60
+            echo "::endgroup::"
+            exit 1
+          }
+      # swift-testing interleaves failures with several hundred passing lines,
+      # and a truncated log usually keeps the wrong end. Repeat the failures at
+      # the bottom so one look at the tail says which test broke.
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::failures"
+            grep -E "✘|recorded an issue" "$RUNNER_TEMP/test.log" | grep -v " skipped\.$" | head -60
+            echo "::endgroup::"
+            exit 1
+          }
+
+  # Runs the client against 9P servers written by other people, in another
+  # language, from the same specs. A client tested only against its own server
+  # proves very little: both ends can share the same misreading.
+  interop:
+    name: Interop (${{ matrix.runner }})
+    timeout-minutes: 25
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      - name: Cache Go binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: interop-servers-${{ matrix.runner }}-v1
+      - name: Interop against p9ufs (9P2000.L) and export9p (9P2000)
+        run: Scripts/interop.sh all
+
+  # The FSKit backend cannot be mounted on a hosted runner — a third-party
+  # module is enabled by a per-user click in System Settings, with no CLI or
+  # MDM route — so CI builds the bundle and asserts on what it produced.
+  fskit-bundle:
+    name: FSKit bundle (macos-26)
+    timeout-minutes: 25
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app and extension, then check the bundle
+        run: Scripts/fskit-bundle-check.sh
+
+  # The reality check: mount a 9P server through the kernel's own NFS client
+  # and use it with ordinary tools. Everything else in the suite talks to our
+  # own code; this talks to the kernel.
+  mount-e2e:
+    name: Mount end to end (${{ matrix.runner }})
+    timeout-minutes: 25
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mount a tree served by fs9p and exercise it
+        run: Scripts/e2e-mount.sh fs9p
+      - name: Show NFS statistics
+        if: always()
+        run: nfsstat -c 2>/dev/null | head -30 || true
+
+  # Same again, but with a third-party 9P server behind the mount, so the
+  # whole stack is proven against an implementation we did not write.
+  mount-e2e-interop:
+    name: Mount a third-party server (${{ matrix.runner }})
+    timeout-minutes: 25
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      - name: Mount a tree served by p9ufs and exercise it
+        run: Scripts/e2e-mount.sh p9ufs
+
+  # Gathers ground truth about what a hosted macOS runner can actually do, so
+  # the mount backends can be designed against reality rather than guesses.
+  probe:
+    name: Probe ${{ matrix.runner }}
+    # Findings are written up in docs/DECISIONS.md; re-run this by hand when a
+    # runner image changes rather than on every push.
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 25
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OS and toolchain
+        run: |
+          sw_vers; uname -a
+          xcodebuild -version || true
+          xcrun --show-sdk-version || true
+          echo "SDKs:"; xcodebuild -showsdks 2>/dev/null | head -20 || true
+
+      - name: Privileges and security posture
+        run: |
+          id
+          echo "--- passwordless sudo?"; sudo -n true && echo YES || echo NO
+          echo "--- SIP"; csrutil status || true
+          echo "--- GUI session"; launchctl managername || true
+          echo "--- console user"; stat -f%Su /dev/console || true
+
+      - name: FSKit availability
+        run: |
+          echo "--- framework"
+          ls -d /System/Library/Frameworks/FSKit.framework 2>/dev/null || echo "NO FSKit.framework"
+          ls /System/Library/Frameworks/FSKit.framework/Versions/A/ 2>/dev/null || true
+          echo "--- fskitd"
+          ls -l /usr/libexec/fskitd /System/Library/Filesystems/*.fs 2>/dev/null | head || true
+          echo "--- mount -F support"
+          man 8 mount 2>/dev/null | col -b | grep -A3 -- "-F" | head -20 || true
+          echo "--- pluginkit"
+          which pluginkit && pluginkit -m -p com.apple.fskit.unary -v 2>&1 | head -20 || echo "no pluginkit"
+
+      - name: Can we compile against FSKit?
+        run: |
+          cat > /tmp/fskit_probe.swift <<'SWIFT'
+          #if canImport(FSKit)
+          import FSKit
+          print("FSKit importable")
+          print("FSUnaryFileSystem:", String(describing: FSUnaryFileSystem.self))
+          #else
+          print("FSKit NOT importable")
+          #endif
+          SWIFT
+          xcrun swiftc -target arm64-apple-macos15.4 -o /tmp/fskit_probe /tmp/fskit_probe.swift 2>&1 | head -30 || true
+          /tmp/fskit_probe 2>&1 | head -5 || echo "probe binary did not run"
+
+      - name: NFS client availability (the loopback mount path)
+        run: |
+          echo "--- mount_nfs"; ls -l /sbin/mount_nfs || echo MISSING
+          echo "--- nfsstat"; which nfsstat || true
+          echo "--- rpcbind/portmap"; ls -l /usr/sbin/rpcbind /usr/libexec/rpc.* 2>/dev/null || true
+          echo "--- mount_nfs usage"; /sbin/mount_nfs 2>&1 | head -20 || true
+          echo "--- can we mkdir a mountpoint and call mount_nfs against a dead port?"
+          mkdir -p /tmp/probe-mnt
+          sudo /sbin/mount_nfs -o vers=3,tcp,port=12049,mountport=12049,soft,timeo=10,retrycnt=0 \
+            localhost:/ /tmp/probe-mnt 2>&1 | head -5 || true
+          mount | grep probe-mnt || echo "(not mounted, as expected against a dead port)"
+
+      - name: Other userspace mount helpers
+        run: |
+          ls -l /sbin/mount_* 2>/dev/null || true
+          echo "--- smbfs"; ls -l /sbin/mount_smbfs 2>/dev/null || true
+          echo "--- webdav"; ls -l /sbin/mount_webdav 2>/dev/null || true
+
+      - name: Third-party 9P servers buildable here?
+        run: |
+          echo "--- go"; go version 2>/dev/null || echo "no go"
+          echo "--- rust"; cargo --version 2>/dev/null || echo "no cargo"
+          echo "--- python"; python3 --version || true
+          echo "--- brew plan9port available?"; brew info plan9port 2>&1 | head -5 || true

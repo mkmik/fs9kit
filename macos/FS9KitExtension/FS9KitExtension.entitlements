@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Lets fskitd load this bundle as a filesystem module. Not an
+	     approval-gated capability: Apple lists "FSKit Module" for the free
+	     Apple Developer tier as well as Developer ID and ADP. -->
+	<key>com.apple.developer.fskit.fsmodule</key>
+	<true/>
+
+	<!-- Mandatory. Every ExtensionKit extension is sandboxed; fskitd will not
+	     load one that does not declare it. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Opening the 9P TCP connection to the server. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- NOTE: `9p+unix:///path/to/socket` mounts do NOT work under this
+	     entitlement set. A sandboxed extension cannot reach an arbitrary unix
+	     socket on disk; it needs the socket inside an app-group container, or
+	     a file-access entitlement for the directory holding it. Add
+	     com.apple.security.application-groups and put the socket in the group
+	     container if you need that transport. -->
+</dict>
+</plist>

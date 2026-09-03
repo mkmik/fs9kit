@@ -1,0 +1,111 @@
+# XcodeGen spec for the fs9kit FSKit backend.
+#
+#   brew install xcodegen && cd macos && xcodegen generate
+#
+# The generated FS9Kit.xcodeproj is not checked in: an Xcode project file is
+# unreviewable and unmergeable, and everything that matters about this one is
+# below. Two targets:
+#
+#   FS9KitApp.app          the container. Its only jobs are to exist somewhere
+#                          LaunchServices can see it, to embed the extension,
+#                          and to tell the user how to turn it on. NOT
+#                          sandboxed: App Sandbox forbids calling /sbin/mount.
+#   FS9KitExtension.appex  the FSKit module. Sandboxed, because every
+#                          ExtensionKit extension must be.
+#
+# Both link the SwiftPM package at the repository root, so the 9P client, the
+# VFS and the FSKit glue exist in exactly one place and are unit-tested on Linux.
+
+name: FS9Kit
+
+options:
+  bundleIdPrefix: com.fs9kit
+  createIntermediateGroups: true
+  # FSGenericURLResource — the only resource kind a filesystem with no block
+  # device can be mounted from — is macOS 26.0. There is no fallback on 15.x.
+  deploymentTarget:
+    macOS: "26.0"
+  minimumXcodeGenVersion: "2.38.0"
+
+packages:
+  fs9kit:
+    path: ..
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    # Set FS9KIT_DEVELOPMENT_TEAM in the environment, or pass
+    # DEVELOPMENT_TEAM=... to xcodebuild. fskitd rejects an unsigned appex
+    # outright, and the fskit.fsmodule entitlement needs a real team.
+    DEVELOPMENT_TEAM: "$(FS9KIT_DEVELOPMENT_TEAM)"
+    CODE_SIGN_STYLE: Automatic
+    DEAD_CODE_STRIPPING: YES
+
+targets:
+
+  FS9KitApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: FS9KitApp
+        excludes: ["Info.plist", "*.entitlements"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fs9kit.FS9KitApp
+        PRODUCT_NAME: FS9Kit
+        INFOPLIST_FILE: FS9KitApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FS9KitApp/FS9KitApp.entitlements
+        # The app is a plain SwiftUI app; nothing here needs the extension's
+        # entitlement, and it must not have the sandbox.
+        ENABLE_APP_SANDBOX: NO
+        SKIP_INSTALL: NO
+    dependencies:
+      - package: fs9kit
+        product: FS9KitAdapter
+      - target: FS9KitExtension
+        embed: true
+        codeSign: true
+        # Xcode's own "Embed ExtensionKit Extensions" phase, spelled out:
+        # products directory, then $(EXTENSIONS_FOLDER_PATH), which resolves to
+        # FS9Kit.app/Contents/Extensions. An appex anywhere else is invisible
+        # to pluginkit and therefore to fskitd.
+        copy:
+          destination: productsDirectory
+          subpath: "$(EXTENSIONS_FOLDER_PATH)"
+
+  FS9KitExtension:
+    type: extensionkit-extension
+    platform: macOS
+    sources:
+      - path: FS9KitExtension
+        excludes: ["Info.plist", "*.entitlements"]
+    settings:
+      base:
+        # An appex bundle identifier must be prefixed by its container's.
+        PRODUCT_BUNDLE_IDENTIFIER: com.fs9kit.FS9KitApp.FS9KitExtension
+        PRODUCT_NAME: FS9KitExtension
+        INFOPLIST_FILE: FS9KitExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FS9KitExtension/FS9KitExtension.entitlements
+        SKIP_INSTALL: YES
+        # Mandatory for an FSKit module. Apple's DTS: the sandbox here is not
+        # about restriction but about opting in to a declared capability set.
+        ENABLE_APP_SANDBOX: YES
+    dependencies:
+      - package: fs9kit
+        product: FS9KitAdapter
+
+schemes:
+  FS9Kit:
+    build:
+      targets:
+        FS9KitApp: all
+        FS9KitExtension: all
+    run:
+      config: Debug
+    archive:
+      config: Release
